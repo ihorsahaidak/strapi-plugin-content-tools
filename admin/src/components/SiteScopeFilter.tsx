@@ -105,7 +105,7 @@ const SiteScopeFilter = () => {
       get(`/content-manager/collection-types/${target}?pageSize=100&sort=name:ASC`)
         .then((res) => {
           if (cancelled) return;
-          setRelOptions((prev) => ({ ...prev, [target]: relationOptions(res.data?.results) }));
+          setRelOptions((prev) => ({ ...prev, [target]: relationOptions((res.data as any)?.results) }));
         })
         .catch(() => {});
     });

@@ -37,7 +37,7 @@ const MoveLocaleDialog = ({ onClose, uid, documentIds, sourceLocale }: Props) =>
     let cancelled = false;
     get('/i18n/locales')
       .then((res) => {
-        if (!cancelled) setLocales(res.data ?? []);
+        if (!cancelled) setLocales((res.data as any) ?? []);
       })
       .catch(() => {});
     return () => {
@@ -74,8 +74,8 @@ const MoveLocaleDialog = ({ onClose, uid, documentIds, sourceLocale }: Props) =>
         sourceLocale,
         targetLocale: target,
       });
-      const moved: string[] = res.data?.moved ?? [];
-      const blocked: Array<{ documentId: string }> = res.data?.blocked ?? [];
+      const moved: string[] = (res.data as any)?.moved ?? [];
+      const blocked: Array<{ documentId: string }> = (res.data as any)?.blocked ?? [];
       toggleNotification({
         type: blocked.length ? 'warning' : 'success',
         message:

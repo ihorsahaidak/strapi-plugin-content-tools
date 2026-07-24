@@ -31,7 +31,7 @@ const ImportButton = () => {
       form.append('file', file);
       const res = await post('/content-tools/import', form);
       const { created = 0, skipped = [], notPublished = [], missingRelations = [] } =
-        res.data ?? {};
+        (res.data as any) ?? {};
 
       const warn = skipped.length > 0 || missingRelations.length > 0 || notPublished.length > 0;
       toggleNotification({

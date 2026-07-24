@@ -47,8 +47,8 @@ const SettingsPage = () => {
     get('/content-tools/schema')
       .then((res) => {
         if (cancelled) return;
-        setContentTypes(res.data?.contentTypes ?? []);
-        setSelection(res.data?.config ?? {});
+        setContentTypes((res.data as any)?.contentTypes ?? []);
+        setSelection((res.data as any)?.config ?? {});
       })
       .catch(() => {
         toggleNotification({ type: 'danger', message: 'Could not load the filter configuration.' });
@@ -80,7 +80,7 @@ const SettingsPage = () => {
     setSaving(true);
     try {
       const res = await put('/content-tools/config', { config: selection });
-      setSelection(res.data ?? selection);
+      setSelection((res.data as any) ?? selection);
       clearFilterConfigCache();
       toggleNotification({ type: 'success', message: 'Filter configuration saved.' });
     } catch {

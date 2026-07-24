@@ -22,7 +22,7 @@ const exportBulkAction = ({ collectionType, model, documents }: any) => {
   const download = async () => {
     try {
       const res = await post('/content-tools/export', { uid: model, documentIds, locale });
-      const { filename, contentBase64, count, mediaCount } = res.data ?? {};
+      const { filename, contentBase64, count, mediaCount } = (res.data as any) ?? {};
 
       const binary = atob(contentBase64);
       const bytes = new Uint8Array(binary.length);
