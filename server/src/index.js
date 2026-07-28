@@ -25,7 +25,7 @@ module.exports = {
       strapi.cron.add({
         'content-tools-daily-dumps': {
           task: async ({ strapi: s }) => {
-            await s.plugin('content-tools').service('dumps').runScheduledDumps();
+            await s.plugin('content-tools').service('dumps').dumpEnabledMissingToday();
           },
           options: { rule: DAILY_DUMP_RULE },
         },

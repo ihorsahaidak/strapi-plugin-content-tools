@@ -120,24 +120,42 @@ module.exports = ({ strapi }) => {
     return { deleted: !!meta };
   };
 
-  // Runs on a daily schedule: dump every collection that has dumps enabled.
-  // Retention pruning is handled by createDump (keeps the newest N).
-  const runScheduledDumps = async () => {
+  const isToday = (iso) => {
+    try {
+      return new Date(iso).toDateString() === new Date().toDateString();
+    } catch {
+      return false;
+    }
+  };
+
+  // Create a dump for every dump-enabled collection that has no dump from today
+  // yet. Used both by the daily cron and right after enabling a collection, so
+  // a manual dump earlier today isn't duplicated. Retention pruning is handled
+  // by createDump (keeps the newest N).
+  const dumpEnabledMissingToday = async () => {
     const config = await strapi.plugin('content-tools').service('config').getConfig();
+    const all = await getAll();
     const enabled = Object.entries(config).filter(([, e]) => e && e.dump);
-    let ok = 0;
+    let created = 0;
+    let skipped = 0;
     for (const [uid] of enabled) {
+      if ((all[uid] || []).some((d) => isToday(d.createdAt))) {
+        skipped += 1;
+        continue;
+      }
       try {
         await createDump(uid);
-        ok += 1;
+        created += 1;
       } catch (err) {
-        strapi.log.error(`[content-tools] scheduled dump ${uid} failed: ${err && err.message}`);
+        strapi.log.error(`[content-tools] auto dump ${uid} failed: ${err && err.message}`);
       }
     }
     if (enabled.length) {
-      strapi.log.info(`[content-tools] scheduled dumps: ${ok}/${enabled.length} collections`);
+      strapi.log.info(
+        `[content-tools] auto dumps: created ${created}, skipped ${skipped} of ${enabled.length}`
+      );
     }
-    return { total: enabled.length, ok };
+    return { total: enabled.length, created, skipped };
   };
 
   return {
@@ -148,6 +166,6 @@ module.exports = ({ strapi }) => {
     createDump,
     restoreDump,
     deleteDump,
-    runScheduledDumps,
+    dumpEnabledMissingToday,
   };
 };

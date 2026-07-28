@@ -52,6 +52,16 @@ module.exports = ({ strapi }) => ({
     }
   },
 
+  // POST /content-tools/dumps/ensure -> create today's dump for enabled
+  // collections that don't have one yet (used right after enabling).
+  async ensure(ctx) {
+    try {
+      ctx.body = await service(strapi).dumpEnabledMissingToday();
+    } catch (err) {
+      sendError(strapi, ctx, err);
+    }
+  },
+
   // POST /content-tools/dumps/delete { uid, dumpId }
   async remove(ctx) {
     try {

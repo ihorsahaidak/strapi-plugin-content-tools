@@ -87,8 +87,23 @@ const CollectionDumpPage = () => {
       await put('/content-tools/config', { config: selection });
       await put('/content-tools/dumps/retention', { retention });
       clearContentToolsConfigCache();
-      toggleNotification({ type: 'success', message: 'Saved.' });
+
+      // Immediately create today's dump for any newly-enabled collection
+      // that doesn't have one yet.
+      setJob({ open: true, title: 'Saving & creating missing dumps…', running: true });
+      const res = await post('/content-tools/dumps/ensure');
+      const created = (res.data as any)?.created ?? 0;
+      await loadOverview();
+      setJob({
+        open: true,
+        title: 'Saved',
+        running: false,
+        message: created
+          ? `Created ${created} dump(s) for newly-enabled collections.`
+          : 'Configuration saved. No new dumps were needed.',
+      });
     } catch {
+      setJob({ open: false, title: '', running: false });
       toggleNotification({ type: 'danger', message: 'Could not save.' });
     } finally {
       setSaving(false);
@@ -165,9 +180,11 @@ const CollectionDumpPage = () => {
               </Box>
               <Box paddingTop={3}>
                 <Typography variant="pi" textColor="neutral600">
-                  Enabled collections are dumped <b>automatically once a day</b> (03:00 server time),
-                  in addition to the manual button. When a collection reaches the limit above, its{' '}
-                  <b>oldest dump is removed</b> to make room for the new one.
+                  Enabling a collection <b>creates its dump immediately</b> (on Save). Enabled
+                  collections are then dumped <b>automatically once a day</b> (03:00 server time) —
+                  the job <b>skips</b> any collection that already has a dump from today (manual or
+                  auto). When a collection reaches the limit above, its <b>oldest dump is removed</b>{' '}
+                  to make room for the new one.
                 </Typography>
               </Box>
             </Box>

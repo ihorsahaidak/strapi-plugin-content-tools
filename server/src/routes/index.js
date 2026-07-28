@@ -100,6 +100,12 @@ module.exports = {
       },
       {
         method: 'POST',
+        path: '/dumps/ensure',
+        handler: 'dumps.ensure',
+        config: { policies: [] },
+      },
+      {
+        method: 'POST',
         path: '/dumps/delete',
         handler: 'dumps.remove',
         config: { policies: [] },
