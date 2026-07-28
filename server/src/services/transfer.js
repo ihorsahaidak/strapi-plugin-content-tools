@@ -184,23 +184,21 @@ module.exports = ({ strapi }) => {
     return Buffer.from(await res.arrayBuffer());
   };
 
-  const exportEntities = async ({ uid, documentIds, locale }) => {
+  // Core: build a JSZip archive for a set of { documentId, locale } refs.
+  const buildArchive = async ({ uid, refs }) => {
     const schema = getSchema(uid);
-    if (!Array.isArray(documentIds) || documentIds.length === 0) {
-      throw fail('BadRequest', 'documentIds must be a non-empty array', 400);
-    }
     const populate = buildPopulate(schema);
     const media = new Map();
     const entities = [];
 
-    for (const documentId of documentIds) {
+    for (const ref of refs) {
       const entity = await strapi
         .documents(uid)
-        .findOne({ documentId, locale, status: 'draft', populate });
+        .findOne({ documentId: ref.documentId, locale: ref.locale ?? undefined, status: 'draft', populate });
       if (!entity) continue;
       entities.push({
-        documentId,
-        locale: entity.locale ?? locale ?? null,
+        documentId: ref.documentId,
+        locale: entity.locale ?? ref.locale ?? null,
         data: transformForExport(entity, schema, media),
       });
     }
@@ -225,20 +223,48 @@ module.exports = ({ strapi }) => {
       version: MANIFEST_VERSION,
       uid,
       exportedAt: new Date().toISOString(),
-      locale: locale ?? null,
       media: Array.from(media.values()),
       entities,
     };
     zip.file('manifest.json', JSON.stringify(manifest, null, 2));
 
+    return { zip, count: entities.length, mediaCount: media.size };
+  };
+
+  // Every distinct { documentId, locale } draft ref of a whole collection.
+  const collectAllRefs = async (uid) => {
+    const rows = await strapi.db
+      .query(uid)
+      .findMany({ select: ['documentId', 'locale'], limit: -1 });
+    const seen = new Set();
+    const refs = [];
+    for (const r of rows) {
+      if (!r.documentId) continue;
+      const key = `${r.documentId}::${r.locale ?? ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      refs.push({ documentId: r.documentId, locale: r.locale ?? undefined });
+    }
+    return refs;
+  };
+
+  // Raw nodebuffer archive (used by dumps).
+  const buildArchiveBuffer = async ({ uid, refs }) => {
+    const { zip, count, mediaCount } = await buildArchive({ uid, refs });
+    const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+    return { buffer, count, mediaCount };
+  };
+
+  const exportEntities = async ({ uid, documentIds, locale }) => {
+    getSchema(uid);
+    if (!Array.isArray(documentIds) || documentIds.length === 0) {
+      throw fail('BadRequest', 'documentIds must be a non-empty array', 400);
+    }
+    const refs = documentIds.map((documentId) => ({ documentId, locale }));
+    const { zip, count, mediaCount } = await buildArchive({ uid, refs });
     const base64 = await zip.generateAsync({ type: 'base64' });
     const safe = uid.split('.').pop();
-    return {
-      filename: `${safe}-export-${entities.length}.zip`,
-      contentBase64: base64,
-      count: entities.length,
-      mediaCount: media.size,
-    };
+    return { filename: `${safe}-export-${count}.zip`, contentBase64: base64, count, mediaCount };
   };
 
   /* ------------------------------------------------------------- import */
@@ -389,7 +415,21 @@ module.exports = ({ strapi }) => {
   const findConflictField = (schema) =>
     CONFLICT_FIELDS.find((f) => schema.attributes && schema.attributes[f]);
 
-  const importEntities = async ({ buffer, user }) => {
+  // Delete every document of a collection (used by "replace" restore).
+  const deleteAllDocuments = async (uid) => {
+    const rows = await strapi.db.query(uid).findMany({ select: ['documentId'], limit: -1 });
+    const ids = [...new Set(rows.map((r) => r.documentId).filter(Boolean))];
+    for (const documentId of ids) {
+      try {
+        await strapi.documents(uid).delete({ documentId });
+      } catch {
+        /* keep going */
+      }
+    }
+    return ids.length;
+  };
+
+  const importArchive = async ({ buffer, user, replace = false }) => {
     const zip = await JSZip.loadAsync(buffer);
     const manifestEntry = zip.file('manifest.json');
     if (!manifestEntry) throw fail('BadRequest', 'Archive is missing manifest.json', 400);
@@ -403,9 +443,14 @@ module.exports = ({ strapi }) => {
     const relResolved = new Map();
     await preResolveRelations(manifest.entities, relResolved);
 
+    // Replace = wipe the collection first, then recreate everything.
+    let deleted = 0;
+    if (replace) deleted = await deleteAllDocuments(uid);
+
     const conflictField = findConflictField(schema);
     const report = {
       uid,
+      deleted,
       created: [],
       skipped: [],
       notPublished: [],
@@ -416,9 +461,10 @@ module.exports = ({ strapi }) => {
       const ctx = { mediaMap, relResolved, relCache: new Map(), report };
       const locale = entity.locale ?? manifest.locale ?? undefined;
 
-      // Conflict: same natural key + locale already present.
+      // Conflict: same natural key + locale already present (skipped in replace
+      // mode, where the collection was just emptied).
       const conflictValue = conflictField ? entity.data[conflictField] : undefined;
-      if (conflictField && conflictValue != null) {
+      if (!replace && conflictField && conflictValue != null) {
         const existing = await strapi.db
           .query(uid)
           .findOne({ where: { [conflictField]: conflictValue, locale: locale ?? null } });
@@ -457,6 +503,7 @@ module.exports = ({ strapi }) => {
 
     return {
       uid,
+      deleted: report.deleted,
       created: report.created.length,
       skipped: report.skipped,
       notPublished: report.notPublished,
@@ -464,5 +511,14 @@ module.exports = ({ strapi }) => {
     };
   };
 
-  return { exportEntities, importEntities };
+  const importEntities = ({ buffer, user }) => importArchive({ buffer, user, replace: false });
+
+  return {
+    exportEntities,
+    importEntities,
+    // Reusable primitives for the dumps feature:
+    buildArchiveBuffer,
+    collectAllRefs,
+    importArchive,
+  };
 };

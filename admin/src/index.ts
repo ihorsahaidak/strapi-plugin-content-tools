@@ -27,6 +27,12 @@ export default {
           Component: () => import('./pages/ImportExport'),
         },
         {
+          intlLabel: { id: `${pluginId}.settings.collection-dump`, defaultMessage: 'Collection Dump' },
+          id: `${pluginId}-collection-dump`,
+          to: `${pluginId}/collection-dump`,
+          Component: () => import('./pages/CollectionDump'),
+        },
+        {
           intlLabel: { id: `${pluginId}.settings.data-transfer`, defaultMessage: 'Data Transfer' },
           id: `${pluginId}-data-transfer`,
           to: `${pluginId}/data-transfer`,
