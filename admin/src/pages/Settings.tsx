@@ -17,7 +17,7 @@ type ContentTypeMeta = {
   attributes: Record<string, AttrMeta>;
 };
 
-const EMPTY: ContentToolsEntry = { fields: [], export: false, import: false };
+const EMPTY: ContentToolsEntry = { fields: [], dump: false };
 
 const shortTarget = (uid?: string) => (uid ? uid.split('.').pop() : '');
 
@@ -70,7 +70,7 @@ const SettingsPage = () => {
       const current = prev[uid] ?? EMPTY;
       const next: ContentToolsEntry = { ...current, ...patch };
       const updated = { ...prev };
-      if (next.fields.length || next.export || next.import) updated[uid] = next;
+      if (next.fields.length || next.dump) updated[uid] = next;
       else delete updated[uid];
       return updated;
     });

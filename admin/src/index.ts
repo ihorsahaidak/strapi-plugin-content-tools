@@ -1,13 +1,10 @@
 import pluginId from './pluginId';
 import RelocatedFilterBar from './components/RelocatedFilterBar';
-import ImportButton from './components/ImportButton';
 import moveLocaleDocumentAction from './actions/moveLocaleDocumentAction';
 import moveLocaleBulkAction from './actions/moveLocaleBulkAction';
-import exportBulkAction from './actions/exportBulkAction';
 
 export default {
   register(app: any) {
-    // Settings → Content Tools → Filters
     app.createSettingSection(
       {
         id: pluginId,
@@ -19,12 +16,6 @@ export default {
           id: `${pluginId}-filters`,
           to: `${pluginId}/filters`,
           Component: () => import('./pages/Settings'),
-        },
-        {
-          intlLabel: { id: `${pluginId}.settings.import-export`, defaultMessage: 'Import / Export' },
-          id: `${pluginId}-import-export`,
-          to: `${pluginId}/import-export`,
-          Component: () => import('./pages/ImportExport'),
         },
         {
           intlLabel: { id: `${pluginId}.settings.collection-dump`, defaultMessage: 'Collection Dump' },
@@ -46,26 +37,14 @@ export default {
     const cm = app.getPlugin('content-manager');
     if (!cm) return;
 
-    // Feature 1 — configurable sticky filters in the list toolbar.
+    // Sticky, configurable filters in the list toolbar.
     cm.injectComponent('listView', 'actions', {
       name: `${pluginId}-site-scope`,
       Component: RelocatedFilterBar,
     });
 
-    // Import button in the list toolbar.
-    cm.injectComponent('listView', 'actions', {
-      name: `${pluginId}-import`,
-      Component: ImportButton,
-    });
-
-    // Feature 2 — move a single entry to another language (edit view + row menu).
+    // Move an entry to another language (edit panel + row menu + bulk).
     cm.apis.addDocumentAction((actions: any[]) => [...actions, moveLocaleDocumentAction]);
-
-    // Feature 3 — bulk actions: move to another language + export selected.
-    cm.apis.addBulkAction((actions: any[]) => [
-      ...actions,
-      moveLocaleBulkAction,
-      exportBulkAction,
-    ]);
+    cm.apis.addBulkAction((actions: any[]) => [...actions, moveLocaleBulkAction]);
   },
 };

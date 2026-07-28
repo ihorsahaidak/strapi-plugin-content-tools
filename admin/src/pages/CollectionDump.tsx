@@ -19,12 +19,7 @@ import { clearContentToolsConfigCache, ContentToolsEntry } from '../utils/config
 type ContentTypeMeta = { uid: string; displayName: string };
 type DumpMeta = { id: string; createdAt: string; count: number; mediaCount: number; size: number };
 
-const EMPTY: ContentToolsEntry & { dump?: boolean } = {
-  fields: [],
-  export: false,
-  import: false,
-  dump: false,
-} as any;
+const EMPTY: ContentToolsEntry = { fields: [], dump: false };
 
 const fmtSize = (b: number) => (b > 1_000_000 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1e3))} KB`);
 const fmtDate = (iso: string) => {
@@ -75,7 +70,7 @@ const CollectionDumpPage = () => {
       const current = prev[uid] ?? EMPTY;
       const next = { ...current, dump: value };
       const updated = { ...prev };
-      if (next.fields?.length || next.export || next.import || next.dump) updated[uid] = next;
+      if (next.fields?.length || next.dump) updated[uid] = next;
       else delete updated[uid];
       return updated;
     });
