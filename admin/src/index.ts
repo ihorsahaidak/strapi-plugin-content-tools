@@ -21,6 +21,12 @@ export default {
           Component: () => import('./pages/Settings'),
         },
         {
+          intlLabel: { id: `${pluginId}.settings.import-export`, defaultMessage: 'Import / Export' },
+          id: `${pluginId}-import-export`,
+          to: `${pluginId}/import-export`,
+          Component: () => import('./pages/ImportExport'),
+        },
+        {
           intlLabel: { id: `${pluginId}.settings.data-transfer`, defaultMessage: 'Data Transfer' },
           id: `${pluginId}-data-transfer`,
           to: `${pluginId}/data-transfer`,

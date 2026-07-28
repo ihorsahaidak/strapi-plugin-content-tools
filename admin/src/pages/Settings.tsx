@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Box, Flex, Typography, Button, Checkbox, Divider, Modal } from '@strapi/design-system';
-import { Check, Download, Upload, ArrowClockwise } from '@strapi/icons';
+import { Check, ArrowClockwise } from '@strapi/icons';
 import { Layouts, Page, useFetchClient, useNotification } from '@strapi/strapi/admin';
 
 import { prettyLabel } from '../utils/scope';
@@ -105,7 +105,7 @@ const SettingsPage = () => {
       <Page.Main>
         <Layouts.Header
           title="Filters"
-          subtitle="Per content type: choose the sticky list filters and enable export / import."
+          subtitle="Choose which fields become sticky list filters in the Content Manager, per content type."
           primaryAction={
             <Button onClick={save} loading={saving} startIcon={<Check />}>
               Save
@@ -126,36 +126,14 @@ const SettingsPage = () => {
                   shadow="tableShadow"
                   borderColor="neutral150"
                 >
-                  {/* header + action toggles */}
-                  <Flex justifyContent="space-between" alignItems="center" wrap="wrap" gap={3}>
-                    <Flex direction="column" alignItems="flex-start">
-                      <Typography variant="delta" tag="h2">
-                        {ct.displayName}
-                      </Typography>
-                      <Typography variant="pi" textColor="neutral500">
-                        {ct.uid}
-                      </Typography>
-                    </Flex>
-                    <Flex gap={5} alignItems="center">
-                      <Checkbox
-                        checked={entry.export}
-                        onCheckedChange={(v: boolean) => updateEntry(ct.uid, { export: !!v })}
-                      >
-                        <Flex gap={1} alignItems="center">
-                          <Download width="1.2rem" height="1.2rem" />
-                          <Typography>Export</Typography>
-                        </Flex>
-                      </Checkbox>
-                      <Checkbox
-                        checked={entry.import}
-                        onCheckedChange={(v: boolean) => updateEntry(ct.uid, { import: !!v })}
-                      >
-                        <Flex gap={1} alignItems="center">
-                          <Upload width="1.2rem" height="1.2rem" />
-                          <Typography>Import</Typography>
-                        </Flex>
-                      </Checkbox>
-                    </Flex>
+                  {/* header */}
+                  <Flex direction="column" alignItems="flex-start">
+                    <Typography variant="delta" tag="h2">
+                      {ct.displayName}
+                    </Typography>
+                    <Typography variant="pi" textColor="neutral500">
+                      {ct.uid}
+                    </Typography>
                   </Flex>
 
                   <Box paddingTop={3} paddingBottom={4}>
