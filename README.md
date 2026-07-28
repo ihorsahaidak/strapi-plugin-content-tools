@@ -138,7 +138,8 @@ Only shown for localized collection types on entries that already exist.
 ## Feature 3 — Export / Import with media
 
 Enabled per content type via the **Export** / **Import** toggles in
-**Settings → Content Tools → Filters** — the actions only appear where enabled.
+**Settings → Content Tools → Import / Export** — the actions only appear where
+enabled.
 
 ### Export
 
@@ -239,22 +240,29 @@ Registered via `createSettingSection` under a **Content Tools** section:
 
 ### Filters
 
-- Lists every `api::` collection type as a card, with:
-  - **Export** / **Import** toggles (gate the Feature-3 actions for that type).
-  - Filterable fields grouped into **Relations / Choices / Dates**.
+- Lists every `api::` collection type as a card; each shows its filterable
+  fields grouped into **Relations / Choices / Dates**.
 - **Save** persists to the plugin store (shared across all admins) and shows a
   **"Reload to apply"** prompt, since open Content-Manager views pick up the
   change on their next load / reload.
 
-Config shape (plugin-store key `filterConfig`; legacy array form is
-auto-normalized on read):
+### Import / Export
+
+- A table of every `api::` collection type with **Export** and **Import**
+  checkboxes. Enabling a box makes the corresponding action
+  ([Feature 3](#feature-3--export--import-with-media)) appear for that type —
+  Export as a list bulk action, Import as a toolbar button.
+
+The Filters and Import / Export pages share the **same** stored config
+(plugin-store key `filterConfig`; legacy array form auto-normalized on read).
+Each page edits its own part and preserves the other's on save:
 
 ```jsonc
 {
   "api::page.page": {
-    "fields": ["websites", "countries", "page_type", "createdAt"],
-    "export": true,
-    "import": false
+    "fields": ["websites", "countries", "page_type", "createdAt"], // Filters tab
+    "export": true,                                                // Import / Export tab
+    "import": false                                                // Import / Export tab
   }
 }
 ```
@@ -310,6 +318,7 @@ strapi-plugin-content-tools/
 │   │   └── exportBulkAction.tsx          # bulk export/download
 │   ├── pages/
 │   │   ├── Settings.tsx           # Filters settings page
+│   │   ├── ImportExport.tsx       # Import / Export toggles settings page
 │   │   └── DataTransfer.tsx       # Data Transfer settings page
 │   └── utils/
 │       ├── scope.ts               # cookie + URL-filter helpers + date presets
