@@ -1,6 +1,6 @@
 import * as React from 'react';
-import { Box, Flex, Typography, Button, Checkbox, Divider } from '@strapi/design-system';
-import { Check, Download, Upload } from '@strapi/icons';
+import { Box, Flex, Typography, Button, Checkbox, Divider, Modal } from '@strapi/design-system';
+import { Check, Download, Upload, ArrowClockwise } from '@strapi/icons';
 import { Layouts, Page, useFetchClient, useNotification } from '@strapi/strapi/admin';
 
 import { prettyLabel } from '../utils/scope';
@@ -40,6 +40,7 @@ const SettingsPage = () => {
 
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
+  const [showReload, setShowReload] = React.useState(false);
   const [contentTypes, setContentTypes] = React.useState<ContentTypeMeta[]>([]);
   const [selection, setSelection] = React.useState<Record<string, ContentToolsEntry>>({});
 
@@ -89,6 +90,7 @@ const SettingsPage = () => {
       setSelection((res.data as any) ?? selection);
       clearContentToolsConfigCache();
       toggleNotification({ type: 'success', message: 'Configuration saved.' });
+      setShowReload(true);
     } catch {
       toggleNotification({ type: 'danger', message: 'Could not save the configuration.' });
     } finally {
@@ -195,6 +197,28 @@ const SettingsPage = () => {
             })}
           </Flex>
         </Layouts.Content>
+
+        <Modal.Root open={showReload} onOpenChange={setShowReload}>
+          <Modal.Content>
+            <Modal.Header>
+              <Modal.Title>Reload to apply</Modal.Title>
+            </Modal.Header>
+            <Modal.Body>
+              <Typography textColor="neutral700">
+                Configuration saved. Reload the page so the filters and the
+                export / import buttons update across the Content Manager.
+              </Typography>
+            </Modal.Body>
+            <Modal.Footer>
+              <Button variant="tertiary" onClick={() => setShowReload(false)}>
+                Later
+              </Button>
+              <Button startIcon={<ArrowClockwise />} onClick={() => window.location.reload()}>
+                Reload now
+              </Button>
+            </Modal.Footer>
+          </Modal.Content>
+        </Modal.Root>
       </Page.Main>
     </Layouts.Root>
   );
