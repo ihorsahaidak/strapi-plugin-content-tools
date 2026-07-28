@@ -235,7 +235,7 @@ module.exports = ({ strapi }) => {
   const collectAllRefs = async (uid) => {
     const rows = await strapi.db
       .query(uid)
-      .findMany({ select: ['documentId', 'locale'], limit: -1 });
+      .findMany({ select: ['documentId', 'locale'] });
     const seen = new Set();
     const refs = [];
     for (const r of rows) {
@@ -417,7 +417,7 @@ module.exports = ({ strapi }) => {
 
   // Delete every document of a collection (used by "replace" restore).
   const deleteAllDocuments = async (uid) => {
-    const rows = await strapi.db.query(uid).findMany({ select: ['documentId'], limit: -1 });
+    const rows = await strapi.db.query(uid).findMany({ select: ['documentId'] });
     const ids = [...new Set(rows.map((r) => r.documentId).filter(Boolean))];
     for (const documentId of ids) {
       try {
