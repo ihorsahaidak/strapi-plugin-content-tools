@@ -163,6 +163,13 @@ const CollectionDumpPage = () => {
                   <Field.Hint />
                 </Field.Root>
               </Box>
+              <Box paddingTop={3}>
+                <Typography variant="pi" textColor="neutral600">
+                  Enabled collections are dumped <b>automatically once a day</b> (03:00 server time),
+                  in addition to the manual button. When a collection reaches the limit above, its{' '}
+                  <b>oldest dump is removed</b> to make room for the new one.
+                </Typography>
+              </Box>
             </Box>
 
             {contentTypes.map((ct) => {

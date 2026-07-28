@@ -120,6 +120,26 @@ module.exports = ({ strapi }) => {
     return { deleted: !!meta };
   };
 
+  // Runs on a daily schedule: dump every collection that has dumps enabled.
+  // Retention pruning is handled by createDump (keeps the newest N).
+  const runScheduledDumps = async () => {
+    const config = await strapi.plugin('content-tools').service('config').getConfig();
+    const enabled = Object.entries(config).filter(([, e]) => e && e.dump);
+    let ok = 0;
+    for (const [uid] of enabled) {
+      try {
+        await createDump(uid);
+        ok += 1;
+      } catch (err) {
+        strapi.log.error(`[content-tools] scheduled dump ${uid} failed: ${err && err.message}`);
+      }
+    }
+    if (enabled.length) {
+      strapi.log.info(`[content-tools] scheduled dumps: ${ok}/${enabled.length} collections`);
+    }
+    return { total: enabled.length, ok };
+  };
+
   return {
     overview,
     listDumps,
@@ -128,5 +148,6 @@ module.exports = ({ strapi }) => {
     createDump,
     restoreDump,
     deleteDump,
+    runScheduledDumps,
   };
 };
