@@ -14,8 +14,8 @@ A Strapi 5 plugin that adds Content-Manager productivity tools:
 4. **Collection Dump** — snapshot a whole collection (all entries + media +
    folder structure) to disk, keep the last N, and restore a snapshot
    (wipe + recreate). Manual and once-a-day automatic.
-5. **Data Transfer** — pull *all* data (content, media, config) from another
-   Strapi environment into this one, from the admin panel.
+5. **Data Transfer** — pull content + media from another Strapi environment
+   into this one, from the admin panel (config and admin accounts kept).
 
 Published as [`strapi-plugin-content-tools`](https://www.npmjs.com/package/strapi-plugin-content-tools).
 The admin code is TypeScript, the server code is CommonJS; both build to `dist/`
@@ -179,11 +179,14 @@ Strapi environment into this one via `@strapi/data-transfer` (same engine as the
 - Local side runs in-process, so only the remote's token is needed.
 
 **Source needs** a **Transfer token** (Settings → Transfer Tokens; not an API
-token) and the **same Strapi version**. Content, media/assets and configuration
-transfer; **admin accounts, tokens and audit logs are excluded** (no lock-out).
+token) and the **same Strapi version**. Only **content (all collection & single
+types) and media/assets** are transferred (`only: ['content', 'files']`).
+**Configuration** (webhooks, core store, plugin/admin settings) and **admin
+accounts / tokens / audit logs are kept** — never replaced.
 
-> ⚠️ Destructive on the local side (full restore); no undo. **Pull only** —
-> remote → local; nothing is pushed to the remote. Restart Strapi after a pull.
+> ⚠️ Destructive for local **content + media** (they're replaced); no undo.
+> **Pull only** — remote → local; nothing is pushed to the remote. Restart
+> Strapi after a pull.
 
 ---
 
@@ -321,8 +324,9 @@ Then submit to the [Strapi Marketplace](https://market.strapi.io).
   rebuilt**; treat as short-lived snapshots, not long-term backups. Create/restore
   run synchronously with a progress modal. Daily cron only fires while running
   and needs `server.cron.enabled`.
-- **Data Transfer** is destructive (full restore), same-version-only, in-process
-  (restart after), excludes admin accounts/tokens, and is pull-only.
+- **Data Transfer** replaces local content + media only (config, admin accounts
+  and tokens are kept), is same-version-only, runs in-process (restart after),
+  and is pull-only.
 - **Published-date filter** works against `publishedAt`; the list shows drafts by
   default (whose `publishedAt` is null), so it effectively surfaces published
   entries.

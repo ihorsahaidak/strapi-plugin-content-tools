@@ -95,9 +95,11 @@ module.exports = ({ strapi }) => {
       autoDestroy: false, // don't tear down the running instance
       strategy: 'restore',
       restore: {
+        // Content-type entries (collection + single types), minus admin/token
+        // types. Media assets included. Configuration NOT touched.
         entities: { exclude: IGNORED_CONTENT_TYPES },
         assets: true,
-        configuration: { webhook: true, coreStore: true },
+        configuration: { webhook: false, coreStore: false },
       },
     });
 
@@ -105,6 +107,9 @@ module.exports = ({ strapi }) => {
     const transferEngine = dtEngine.createTransferEngine(source, destination, {
       versionStrategy: 'exact',
       schemaStrategy: 'strict',
+      // Only content + media — never configuration (webhooks, core store,
+      // plugin/admin settings) or admin accounts/tokens.
+      only: ['content', 'files'],
       transforms: {
         links: [{ filter: (link) => notIgnored(link.left?.type) && notIgnored(link.right?.type) }],
         entities: [{ filter: (entity) => notIgnored(entity.type) }],

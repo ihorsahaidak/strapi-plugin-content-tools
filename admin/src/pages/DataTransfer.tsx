@@ -177,8 +177,9 @@ const DataTransferPage = () => {
             {/* danger note */}
             <Box padding={4} hasRadius background="danger100" borderColor="danger200">
               <Typography textColor="danger700">
-                Pulling replaces <b>all data in this environment</b> — content, media, admin users,
-                tokens and config — with the source environment&apos;s. This cannot be undone.
+                Pulling replaces this environment&apos;s <b>content and media</b> (all collection &amp;
+                single types) with the source&apos;s. Your <b>admin users, tokens and configuration
+                are kept</b>. This cannot be undone.
               </Typography>
             </Box>
 
@@ -257,13 +258,13 @@ const DataTransferPage = () => {
         <Modal.Root open={!!confirmTarget} onOpenChange={() => setConfirmTarget(null)}>
           <Modal.Content>
             <Modal.Header>
-              <Modal.Title>Replace all data?</Modal.Title>
+              <Modal.Title>Replace content &amp; media?</Modal.Title>
             </Modal.Header>
             <Modal.Body>
               <Typography textColor="neutral700">
-                This will <b>delete everything in this environment</b> and replace it with the data
-                from <b>{confirmTarget?.name || confirmTarget?.url}</b>. Make sure you have a backup.
-                This cannot be undone.
+                This replaces this environment&apos;s <b>content and media</b> with the data from{' '}
+                <b>{confirmTarget?.name || confirmTarget?.url}</b>. Admin users, tokens and config
+                are kept. Make sure you have a backup — this cannot be undone.
               </Typography>
             </Modal.Body>
             <Modal.Footer>
