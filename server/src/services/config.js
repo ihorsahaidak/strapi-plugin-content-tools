@@ -29,15 +29,17 @@ module.exports = ({ strapi }) => {
 
   const normalizeEntry = (raw) => {
     if (Array.isArray(raw)) {
-      return { fields: [...new Set(raw)], dump: false };
+      return { fields: [...new Set(raw)], export: false, import: false, dump: false };
     }
     if (raw && typeof raw === 'object') {
       return {
         fields: Array.isArray(raw.fields) ? [...new Set(raw.fields)] : [],
+        export: !!raw.export,
+        import: !!raw.import,
         dump: !!raw.dump,
       };
     }
-    return { fields: [], dump: false };
+    return { fields: [], export: false, import: false, dump: false };
   };
 
   const getConfig = async () => {
@@ -65,7 +67,7 @@ module.exports = ({ strapi }) => {
         const entry = normalizeEntry(raw);
         entry.fields = [...new Set(validFieldsFor(uid, entry.fields))];
         // Keep the entry only if it enables something.
-        if (entry.fields.length || entry.dump) clean[uid] = entry;
+        if (entry.fields.length || entry.export || entry.import || entry.dump) clean[uid] = entry;
       }
     }
     await store().set({ key: STORE_KEY, value: clean });

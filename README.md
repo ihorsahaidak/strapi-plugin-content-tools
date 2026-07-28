@@ -8,17 +8,19 @@ A Strapi 5 plugin that adds Content-Manager productivity tools:
    and navigation via a cookie, like the language selector.
 2. **Move an entry between languages** — reassign an entry's locale in place
    (single, per-row, and bulk), without creating a copy.
-3. **Collection Dump** — snapshot a whole collection (all entries + media +
+3. **Export / Import entries with media** — export selected grid entries to a
+   ZIP (media + folder structure included) and import that archive into another
+   environment. Opt-in per content type.
+4. **Collection Dump** — snapshot a whole collection (all entries + media +
    folder structure) to disk, keep the last N, and restore a snapshot
    (wipe + recreate). Manual and once-a-day automatic.
-4. **Data Transfer** — pull *all* data (content, media, config) from another
+5. **Data Transfer** — pull *all* data (content, media, config) from another
    Strapi environment into this one, from the admin panel.
 
 Published as [`strapi-plugin-content-tools`](https://www.npmjs.com/package/strapi-plugin-content-tools).
 The admin code is TypeScript, the server code is CommonJS; both build to `dist/`
 via `@strapi/sdk-plugin`. `@strapi/design-system`, `@strapi/icons`,
-`@strapi/data-transfer`, react and styled-components are peer dependencies
-(shared with the host app).
+`@strapi/data-transfer`, react and styled-components are peer dependencies.
 
 ---
 
@@ -27,8 +29,9 @@ via `@strapi/sdk-plugin`. `@strapi/design-system`, `@strapi/icons`,
 - [Installation & enabling](#installation--enabling)
 - [Feature 1 — Sticky filters](#feature-1--sticky-filters)
 - [Feature 2 — Move to another language](#feature-2--move-to-another-language)
-- [Feature 3 — Collection Dump](#feature-3--collection-dump)
-- [Feature 4 — Data Transfer](#feature-4--data-transfer)
+- [Feature 3 — Export / Import with media](#feature-3--export--import-with-media)
+- [Feature 4 — Collection Dump](#feature-4--collection-dump)
+- [Feature 5 — Data Transfer](#feature-5--data-transfer)
 - [Settings pages](#settings-pages)
 - [HTTP API](#http-api)
 - [Project structure](#project-structure)
@@ -69,8 +72,8 @@ job additionally needs Strapi's scheduler enabled (`config/server` →
 
 ## Feature 1 — Sticky filters
 
-Adds a filter row **above** the Content-Manager list toolbar (Search / Filters
-bar). Each configured field renders a control:
+Adds a filter row **above** the Content-Manager list toolbar. Each configured
+field renders a control:
 
 | Field kind      | Control                                   | Query applied                        |
 | --------------- | ----------------------------------------- | ------------------------------------ |
@@ -80,102 +83,107 @@ bar). Each configured field renders a control:
 | `createdAt`     | date-range preset dropdown                | `filters[createdAt][$gte]=<iso>`     |
 | `publishedAt`   | date-range preset dropdown (D&P only)     | `filters[publishedAt][$gte]=<iso>`   |
 
-### Which fields appear
-
 Configured per content type in **Settings → Content Tools → Filters**; nothing
-appears until enabled there. Field names are auto-detected from the schema
-(so different types can use different relation field names). Noisy relations
-(`createdBy`, `updatedBy`, `localizations`, and any `admin::user` relation) are
-never offered.
-
-### Date range presets
-
-`createdAt` / `publishedAt` offer: **Today**, **Last 3 days**, **Last week**,
-**Last month** (30 d), **Last year** (365 d). Cutoffs snap to start-of-day so a
-selected preset still reads correctly after a same-day reload.
-
-### Stickiness
-
-Stored in the `content-tools:scope` cookie. **Relation** picks are keyed by
-target uid (a Website pick sticks across every content type referencing it);
-**enum / boolean / date** picks are stored per content type. The URL `filters`
-param is the live source of truth; the cookie seeds it when a list has no
-filter yet.
+appears until enabled. Field names are auto-detected; noisy relations
+(`createdBy`, `updatedBy`, `localizations`, any `admin::user` relation) are never
+offered. Date presets: **Today / Last 3 days / Last week / Last month (30 d) /
+Last year (365 d)** (cutoffs snap to start-of-day). Selections persist in the
+`content-tools:scope` cookie — relation picks stick across content types (keyed
+by target uid), enum/boolean/date picks per content type.
 
 ---
 
 ## Feature 2 — Move to another language
 
 Reassigns an entry's locale **in place** at the database level — no copy, and
-nothing left in the source locale. Both draft and published rows of the
-document are moved; component / relation / media links (keyed by entry id)
-survive untouched.
+nothing left in the source locale. Both draft and published rows move; component
+/ relation / media links (keyed by entry id) survive untouched.
 
-**Conflict handling:** if the document already exists in the target language,
-the move is **blocked with a warning** (single) or that entry is **skipped and
-reported** (bulk).
+**Conflict:** if the document already exists in the target language, the move is
+**blocked with a warning** (single) or **skipped and reported** (bulk).
 
-Triggers: **edit-view action panel**, the **list-view row `⋯` menu**, and the
-**list-view bulk bar**. Only for localized collection types on entries that
-already exist.
+Triggers: **edit-view action panel**, the **row `⋯` menu**, and the **bulk bar**.
+Only for localized collection types on entries that already exist.
 
-> ⚠️ Writes at the DB level and bypasses document-service lifecycles, so
-> search-index / reindex plugins do not fire automatically — reindex manually
-> if an external index must reflect the change.
+> ⚠️ Bypasses document-service lifecycles (raw DB write), so search-index
+> plugins don't reindex automatically.
 
 ---
 
-## Feature 3 — Collection Dump
+## Feature 3 — Export / Import with media
+
+Enabled per content type via the **Export** / **Import** toggles in
+**Settings → Content Tools → Import / Export** — the actions appear only where
+enabled. This is for **selective** content migration (cherry-pick grid rows);
+for a full clone use [Collection Dump](#feature-4--collection-dump) or
+[Data Transfer](#feature-5--data-transfer).
+
+### Export
+
+A **bulk action** *Export selected* in the list view:
+
+1. Deep-populates each selected entry (components, dynamic zones, media,
+   relations — fragment API for polymorphic dynamic zones).
+2. Replaces media with `{ __media: <hash> }` refs and relations with
+   `{ __rel: <target>, field, value }` natural-key refs.
+3. Bundles a `manifest.json` + media bytes into a ZIP (folder structure kept).
+4. Returns the ZIP base64-encoded; the browser downloads it as a Blob.
+
+### Import
+
+An **Import** button in the list toolbar uploads a ZIP from any environment:
+
+1. Recreates the media folder tree **by name** (missing folders created).
+2. **Dedupes media by hash** (reuses existing files).
+3. **Matches relations by name** (`name`/`slug`/`title`/`code`/`uid`); unmatched
+   are skipped and reported.
+4. **Skips same-slug + locale conflicts** (no overwrite).
+5. Creates each entry, publishes it (D&P), and stamps `createdAt` = import time.
+
+Notification reports created / skipped / not-published / unmatched relations.
+
+---
+
+## Feature 4 — Collection Dump
 
 **Settings → Content Tools → Collection Dump** — full-collection snapshots.
 
-- **Enable per content type** (checkbox) and set **Keep last N dumps** (max 7).
-- A **dump** is a ZIP of the whole collection (every document, all locales,
-  media + folder structure), written to disk, with metadata in the plugin store.
-- **Create dump** — manual button, shows a progress modal.
-- **Restore** — **wipe the collection and recreate it from the snapshot**
-  (media deduped by hash, relations matched by name). Destructive; confirmed
-  with a modal.
-- **Retention** — when a collection exceeds *Keep last N*, its oldest dump is
-  deleted.
+- **Enable per content type** and set **Keep last N dumps** (max 7).
+- A dump is a ZIP of the whole collection (every document, all locales, media +
+  folder structure), written to disk, with metadata in the plugin store.
+- **Create dump** — manual button with a progress modal.
+- **Restore** — **wipe the collection and recreate it from the snapshot** (media
+  deduped by hash, relations by name). Destructive; confirmed with a modal.
+- **Retention** — the oldest dump is deleted once *Keep last N* is exceeded.
 
 ### Automatic dumps
 
-- Enabling a collection (on **Save**) **creates its dump immediately** if it
-  doesn't already have one from today.
-- A **daily cron** (03:00 server time) dumps every enabled collection, but
-  **skips** any that already has a dump dated today (manual or auto), so the
-  same day is never duplicated.
+- Enabling a collection (on **Save**) **creates its dump immediately** if none
+  exists from today.
+- A **daily cron** (03:00 server time) dumps every enabled collection but
+  **skips** any that already has a dump dated today (manual or auto).
 
-Requires the host app to have Strapi's scheduler enabled
-(`config/server` → `cron: { enabled: true }`).
+Requires `config/server` → `cron: { enabled: true }`.
 
 ---
 
-## Feature 4 — Data Transfer
+## Feature 5 — Data Transfer
 
 **Settings → Content Tools → Data Transfer** — pull *all* data from another
-Strapi environment into this one, using the built-in `@strapi/data-transfer`
-engine (the same machinery as the `strapi transfer` CLI).
+Strapi environment into this one via `@strapi/data-transfer` (same engine as the
+`strapi transfer` CLI).
 
-- **Save environments**: `{ name, url, transfer token }` (token stored masked;
-  blank on re-save keeps the stored one).
-- **Pull & replace**: `remote source → local destination` with the **restore**
-  strategy, run as a **background job** with a polled status line.
-- The local side runs in-process (`getStrapi: () => strapi`), so only the
-  remote's token is needed.
+- **Save environments** `{ name, url, transfer token }` (token stored masked).
+- **Pull & replace**: `remote source → local destination` (**restore**), run as
+  a background job with a polled status line.
+- Local side runs in-process, so only the remote's token is needed.
 
-**Source requirements:** a **Transfer token** from the source env
-(Settings → Transfer Tokens; not an API token) and the **same Strapi version**
-(`versionStrategy: 'exact'`).
+**Source needs** a **Transfer token** (Settings → Transfer Tokens; not an API
+token) and the **same Strapi version**. Content, media/assets and configuration
+transfer; **admin accounts, tokens and audit logs are excluded** (no lock-out).
 
-**Scope:** content, media/assets, and configuration transfer; **admin accounts,
-API/transfer tokens and audit logs are excluded** (Strapi default) so you are
-not locked out.
-
-> ⚠️ Destructive: pulling deletes this environment's data and replaces it with
-> the source's. No undo — back up first. Only remote → local (pull) is offered.
-> Restart Strapi after a pull so the running instance loads fresh schema/data.
+> ⚠️ Destructive on the local side (full restore); no undo. **Pull only** —
+> remote → local; nothing is pushed to the remote. Restart Strapi after a pull.
 
 ---
 
@@ -183,52 +191,44 @@ not locked out.
 
 Registered via `createSettingSection` under a **Content Tools** section.
 
-### Filters
+- **Filters** — filterable fields per content type, grouped **Relations /
+  Choices / Dates**. Save shows a **"Reload to apply"** prompt.
+- **Import / Export** — per-type **Export** / **Import** toggles (gate Feature 3).
+- **Collection Dump** — per-type enable + Create/Restore/Delete + **Keep last N**.
+- **Data Transfer** — saved environments + pull.
 
-Every `api::` collection type as a card; each shows its filterable fields
-grouped into **Relations / Choices / Dates**. **Save** persists to the plugin
-store and shows a **"Reload to apply"** prompt (open Content-Manager views pick
-up the change on their next load).
-
-### Collection Dump
-
-Per-collection **Enable dumps** checkbox + Create / Restore / Delete controls
-and the global **Keep last N** retention — see
-[Feature 3](#feature-3--collection-dump).
-
-### Data Transfer
-
-Saved environments + pull — see [Feature 4](#feature-4--data-transfer).
-
-Config shape (plugin-store key `filterConfig`; legacy array form
-auto-normalized on read):
+The Filters and Import / Export tabs share one config; each preserves the
+other's part on save. Config shape (plugin-store key `filterConfig`; legacy
+array form auto-normalized):
 
 ```jsonc
 {
   "api::page.page": {
-    "fields": ["websites", "countries", "page_type", "createdAt"], // Filters tab
-    "dump": true                                                   // Collection Dump tab
+    "fields": ["websites", "countries", "page_type", "createdAt"], // Filters
+    "export": true,                                                // Import / Export
+    "import": false,                                               // Import / Export
+    "dump": true                                                   // Collection Dump
   }
 }
 ```
 
-Other plugin-store keys: `dumps` (dump metadata per uid), `dumpRetention`,
-`dataTransferTargets`.
+Other plugin-store keys: `dumps`, `dumpRetention`, `dataTransferTargets`.
 
 ---
 
 ## HTTP API
 
-All routes are **admin-type** (require an authenticated admin session), mounted
-under `/content-tools`.
+All routes are **admin-type** (authenticated admin), mounted under `/content-tools`.
 
 | Method | Path                          | Body / input                                          | Purpose                              |
 | ------ | ----------------------------- | ----------------------------------------------------- | ------------------------------------ |
 | POST   | `/move-locale`                | `{ uid, documentId, sourceLocale, targetLocale }`     | Move one entry to another language   |
 | POST   | `/move-locale-many`           | `{ uid, documentIds[], sourceLocale, targetLocale }`  | Bulk move                            |
-| GET    | `/config`                     | —                                                     | Per-CT config `{ fields, dump }`     |
-| PUT    | `/config`                     | `{ config: { "<uid>": { fields, dump } } }`           | Save config                          |
+| GET    | `/config`                     | —                                                     | Per-CT config `{ fields, export, import, dump }` |
+| PUT    | `/config`                     | `{ config: { "<uid>": { … } } }`                      | Save config                          |
 | GET    | `/schema`                     | —                                                     | Filterable fields per CT + config    |
+| POST   | `/export`                     | `{ uid, documentIds[], locale }`                      | Export → `{ filename, contentBase64, count, mediaCount }` |
+| POST   | `/import`                     | multipart, field `file` (the ZIP)                     | Import → `{ created, skipped, notPublished, missingRelations }` |
 | GET    | `/dumps`                      | —                                                     | `{ retention, dumps: { uid: [...] } }` |
 | PUT    | `/dumps/retention`            | `{ retention }`                                       | Set keep-last-N (1–7)                |
 | POST   | `/dumps/create`               | `{ uid }`                                             | Create a dump                        |
@@ -236,12 +236,12 @@ under `/content-tools`.
 | POST   | `/dumps/ensure`               | —                                                     | Create today's dump for enabled CTs missing one |
 | POST   | `/dumps/delete`               | `{ uid, dumpId }`                                     | Delete a dump                        |
 | GET    | `/data-transfer/targets`      | —                                                     | Saved environments (token masked)    |
-| PUT    | `/data-transfer/targets`      | `{ targets: [{ id, name, url, token }] }`             | Save environments                    |
+| PUT    | `/data-transfer/targets`      | `{ targets: [...] }`                                  | Save environments                    |
 | POST   | `/data-transfer/pull`         | `{ targetId }`                                        | Start a pull (background) → status   |
 | GET    | `/data-transfer/status`       | —                                                     | Current / last transfer status       |
 
-`409` is returned by `/move-locale` when the target language already exists, and
-by `/data-transfer/pull` when a transfer is already running.
+`409`: `/move-locale` when the target language exists; `/data-transfer/pull`
+when a transfer is already running.
 
 ---
 
@@ -249,57 +249,41 @@ by `/data-transfer/pull` when a transfer is already running.
 
 ```
 strapi-plugin-content-tools/
-├── package.json
 ├── admin/src/
-│   ├── index.ts                 # register settings section; inject filter bar; register move actions
-│   ├── components/
-│   │   ├── SiteScopeFilter.tsx    # the filter controls (config-driven)
-│   │   ├── RelocatedFilterBar.tsx # portals the filter row above the toolbar
-│   │   └── MoveLocaleDialog.tsx   # shared move-locale modal body/footer
-│   ├── actions/
-│   │   ├── moveLocaleDocumentAction.tsx  # edit panel + row-menu action
-│   │   └── moveLocaleBulkAction.tsx      # bulk move
-│   ├── pages/
-│   │   ├── Settings.tsx           # Filters
-│   │   ├── CollectionDump.tsx     # Collection Dump
-│   │   └── DataTransfer.tsx       # Data Transfer
-│   └── utils/
-│       ├── scope.ts               # cookie + URL-filter helpers + date presets
-│       └── configClient.ts        # window-shared cache of the config
+│   ├── index.ts                 # settings section; inject filter bar + import button; move/export actions
+│   ├── components/  SiteScopeFilter · RelocatedFilterBar · MoveLocaleDialog · ImportButton
+│   ├── actions/     moveLocaleDocumentAction · moveLocaleBulkAction · exportBulkAction
+│   ├── pages/       Settings (Filters) · ImportExport · CollectionDump · DataTransfer
+│   └── utils/       scope.ts · configClient.ts
 └── server/src/
-    ├── index.js                   # server entry + daily-dump cron registration
-    ├── routes/index.js            # admin routes under /content-tools
-    ├── controllers/{move-locale,config,data-transfer,dumps}.js
-    └── services/{move-locale,config,transfer,data-transfer,dumps}.js
+    ├── index.js                 # server entry + daily-dump cron
+    ├── routes/index.js
+    ├── controllers/  move-locale · config · transfer · data-transfer · dumps
+    └── services/     move-locale · config · transfer · data-transfer · dumps
 ```
 
-`services/transfer.js` is an internal engine (build a media-aware archive from a
-collection, and restore one) reused by the Collection Dump feature — it has no
-routes of its own.
+`services/transfer.js` is the shared archive engine (build a media-aware ZIP,
+and restore one), used by Export/Import and Collection Dump.
 
 ### Key integration points
 
-- **Admin injection:** `getPlugin('content-manager').injectComponent('listView','actions', …)`
-  for the filter bar; `apis.addDocumentAction` / `apis.addBulkAction` for move.
-- **Filter placement:** `RelocatedFilterBar` keeps a hidden marker in the
-  `listView.actions` zone and portals the real UI into a `<div>` inserted before
-  the action bar inside `<main id="main-content">`, copying its computed padding.
-- **Config cache:** stored on `window` so lazy settings chunks and the list-view
-  chunk share one instance (clearing on save applies without a full reload).
-- **Locale move:** knex `UPDATE … SET locale`, keyed by `document_id`.
-- **Dumps / media:** `services/transfer.js` builds/restores a ZIP (manifest +
-  `media/<hash><ext>`); media via `@strapi/upload` `folder`/`upload` services,
-  deduped by hash; restore-replace deletes documents via the document service.
-- **Cron:** `strapi.cron.add` in the server bootstrap, gated by the app's
+- **Admin injection:** `injectComponent('listView','actions', …)` for the filter
+  bar and Import button; `apis.addDocumentAction` / `apis.addBulkAction` for
+  move + export.
+- **Filter placement:** `RelocatedFilterBar` portals the row above the toolbar
+  (before the action bar inside `<main id="main-content">`).
+- **Config cache** on `window` so lazy chunks share one instance.
+- **Locale move:** knex `UPDATE … SET locale` by `document_id`.
+- **Archives/media:** ZIP manifest + `media/<hash><ext>`; `@strapi/upload`
+  `folder`/`upload` services, deduped by hash.
+- **Dumps:** disk files + plugin-store metadata; daily `strapi.cron.add` gated by
   `server.cron.enabled`.
 - **Data transfer:** `@strapi/data-transfer` remote source → local destination
-  (`strategy: 'restore'`) via `createTransferEngine`.
+  (`strategy: 'restore'`).
 
 ---
 
 ## Development & deployment
-
-Built with [`@strapi/sdk-plugin`](https://docs.strapi.io/cms/plugins-development/plugin-sdk).
 
 ```bash
 npm install
@@ -308,7 +292,7 @@ npm run verify     # marketplace-readiness gate
 npm run watch:link # develop against a linked Strapi app (yalc)
 ```
 
-Quick server-side health check (admin routes require auth, so `401` = healthy):
+Health check (admin routes require auth, so `401` = healthy):
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:1337/content-tools/config   # 401
@@ -317,32 +301,29 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:1337/content-tools/con
 ### Publishing
 
 ```bash
-npm version patch          # bump (commits + tags)
-npm run build && npm run verify
-npm publish --access public
+npm version patch && npm run build && npm run verify && npm publish --access public
 ```
 
-Then submit the npm package to the [Strapi Marketplace](https://market.strapi.io).
+Then submit to the [Strapi Marketplace](https://market.strapi.io).
 
 ---
 
 ## Known limitations
 
-- **Search-index reindex** is not triggered by the locale move (raw DB write).
-- **Collection Dump files** live under `<app>/.tmp` — **ephemeral if the
-  container image is rebuilt** (metadata then points at missing files, which
-  restore reports cleanly). Treat dumps as short-lived working snapshots, not
-  long-term backups. Point the dump dir at a persisted volume for durability.
-- **Dump create/restore** run synchronously with a progress modal; a very large
-  collection can be slow.
-- **Restore relations** are matched by natural key; unmatched links are dropped
+- **Locale move** doesn't trigger search-index reindexing (raw DB write).
+- **Export size:** the ZIP is base64 in a JSON response — fine for typical
+  exports; very large media sets would want a streamed binary download.
+- **Media provider:** local provider read from disk; others fall back to fetching
+  the file URL.
+- **Import / restore relations** matched by natural key; unmatched links dropped
   and reported.
-- **Daily dump cron** only fires while the container is running and requires
-  `server.cron.enabled`; it does not back-fill missed days.
-- **Published-date filter** works against `publishedAt`; because the list view
-  shows the draft version by default (whose `publishedAt` is null), it
-  effectively surfaces entries that have been published.
-- **Data Transfer** is destructive (full restore), requires the source to be the
-  same Strapi version, runs in-process (restart after a pull), and excludes
-  admin accounts/tokens. Pull only (remote → local).
+- **Collection Dump files** live under `<app>/.tmp` — **ephemeral if the image is
+  rebuilt**; treat as short-lived snapshots, not long-term backups. Create/restore
+  run synchronously with a progress modal. Daily cron only fires while running
+  and needs `server.cron.enabled`.
+- **Data Transfer** is destructive (full restore), same-version-only, in-process
+  (restart after), excludes admin accounts/tokens, and is pull-only.
+- **Published-date filter** works against `publishedAt`; the list shows drafts by
+  default (whose `publishedAt` is null), so it effectively surfaces published
+  entries.
 ```

@@ -255,6 +255,18 @@ module.exports = ({ strapi }) => {
     return { buffer, count, mediaCount };
   };
 
+  const exportEntities = async ({ uid, documentIds, locale }) => {
+    getSchema(uid);
+    if (!Array.isArray(documentIds) || documentIds.length === 0) {
+      throw fail('BadRequest', 'documentIds must be a non-empty array', 400);
+    }
+    const refs = documentIds.map((documentId) => ({ documentId, locale }));
+    const { zip, count, mediaCount } = await buildArchive({ uid, refs });
+    const base64 = await zip.generateAsync({ type: 'base64' });
+    const safe = uid.split('.').pop();
+    return { filename: `${safe}-export-${count}.zip`, contentBase64: base64, count, mediaCount };
+  };
+
   /* ------------------------------------------------------------- import */
 
   const ensureFolder = async (segments, user, cache) => {
@@ -499,8 +511,12 @@ module.exports = ({ strapi }) => {
     };
   };
 
-  // Archive/restore primitives used by the Collection Dump feature.
+  const importEntities = ({ buffer, user }) => importArchive({ buffer, user, replace: false });
+
   return {
+    exportEntities,
+    importEntities,
+    // Reusable primitives for the dumps feature:
     buildArchiveBuffer,
     collectAllRefs,
     importArchive,

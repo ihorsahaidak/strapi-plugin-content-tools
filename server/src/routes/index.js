@@ -39,6 +39,18 @@ module.exports = {
         config: { policies: [] },
       },
       {
+        method: 'POST',
+        path: '/export',
+        handler: 'transfer.exportEntities',
+        config: { policies: [] },
+      },
+      {
+        method: 'POST',
+        path: '/import',
+        handler: 'transfer.importEntities',
+        config: { policies: [] },
+      },
+      {
         method: 'GET',
         path: '/data-transfer/targets',
         handler: 'data-transfer.targets',
