@@ -7,21 +7,36 @@ import {
   unstable_useContentManagerContext as useContentManagerContext,
 } from '@strapi/strapi/admin';
 
+import { fetchContentToolsConfig } from '../utils/configClient';
+
 /**
- * "Import" button injected into the list-view toolbar. Uploads a ZIP produced
- * by the Export action (from any environment); the server recreates media +
- * folder structure and creates the entries, skipping conflicts.
+ * "Import" button injected into the list-view toolbar. Only shown when import
+ * is enabled for this content type in Settings → Content Tools → Filters.
+ * Uploads a ZIP produced by the Export action (from any environment); the
+ * server recreates media + folder structure and creates the entries.
  */
 const ImportButton = () => {
   const ctx = useContentManagerContext() as any;
-  const { post } = useFetchClient();
+  const { post, get } = useFetchClient();
   const { toggleNotification } = useNotification();
 
   const [open, setOpen] = React.useState(false);
   const [file, setFile] = React.useState<File | null>(null);
   const [busy, setBusy] = React.useState(false);
+  const [enabled, setEnabled] = React.useState(false);
 
-  if (ctx?.collectionType !== 'collection-types') return null;
+  const model: string | undefined = ctx?.model;
+  React.useEffect(() => {
+    let cancelled = false;
+    fetchContentToolsConfig(get).then((cfg) => {
+      if (!cancelled) setEnabled(!!(model && cfg[model]?.import));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [get, model]);
+
+  if (ctx?.collectionType !== 'collection-types' || !enabled) return null;
 
   const submit = async () => {
     if (!file) return;

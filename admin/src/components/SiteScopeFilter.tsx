@@ -13,7 +13,7 @@ import {
   unstable_useContentManagerContext as useContentManagerContext,
 } from '@strapi/strapi/admin';
 
-import { fetchFilterConfig } from '../utils/configClient';
+import { fetchContentToolsConfig } from '../utils/configClient';
 import {
   Descriptor,
   readValues,
@@ -61,8 +61,8 @@ const SiteScopeFilter = () => {
       return;
     }
     let cancelled = false;
-    fetchFilterConfig(get).then((cfg) => {
-      if (!cancelled) setFields(cfg[model] ?? []);
+    fetchContentToolsConfig(get).then((cfg) => {
+      if (!cancelled) setFields(cfg[model]?.fields ?? []);
     });
     return () => {
       cancelled = true;

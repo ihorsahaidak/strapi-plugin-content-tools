@@ -1,17 +1,10 @@
 import * as React from 'react';
-import {
-  Box,
-  Flex,
-  Typography,
-  Button,
-  Checkbox,
-  Divider,
-} from '@strapi/design-system';
-import { Check } from '@strapi/icons';
+import { Box, Flex, Typography, Button, Checkbox, Divider } from '@strapi/design-system';
+import { Check, Download, Upload } from '@strapi/icons';
 import { Layouts, Page, useFetchClient, useNotification } from '@strapi/strapi/admin';
 
 import { prettyLabel } from '../utils/scope';
-import { clearFilterConfigCache } from '../utils/configClient';
+import { clearContentToolsConfigCache, ContentToolsEntry } from '../utils/configClient';
 
 type AttrMeta = {
   type: 'relation' | 'enumeration' | 'boolean' | 'datetime';
@@ -24,14 +17,22 @@ type ContentTypeMeta = {
   attributes: Record<string, AttrMeta>;
 };
 
+const EMPTY: ContentToolsEntry = { fields: [], export: false, import: false };
+
 const shortTarget = (uid?: string) => (uid ? uid.split('.').pop() : '');
 
 const attrHint = (attr: AttrMeta) => {
-  if (attr.type === 'relation') return `relation → ${shortTarget(attr.target)}`;
-  if (attr.type === 'enumeration') return `enum (${(attr.enum ?? []).length} values)`;
+  if (attr.type === 'relation') return shortTarget(attr.target);
+  if (attr.type === 'enumeration') return `${(attr.enum ?? []).length} values`;
   if (attr.type === 'datetime') return 'date range';
-  return 'boolean';
+  return 'yes / no';
 };
+
+const GROUPS: Array<{ key: string; label: string; match: (a: AttrMeta) => boolean }> = [
+  { key: 'relation', label: 'Relations', match: (a) => a.type === 'relation' },
+  { key: 'choice', label: 'Choices', match: (a) => a.type === 'enumeration' || a.type === 'boolean' },
+  { key: 'date', label: 'Dates', match: (a) => a.type === 'datetime' },
+];
 
 const SettingsPage = () => {
   const { get, put } = useFetchClient();
@@ -40,7 +41,7 @@ const SettingsPage = () => {
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [contentTypes, setContentTypes] = React.useState<ContentTypeMeta[]>([]);
-  const [selection, setSelection] = React.useState<Record<string, string[]>>({});
+  const [selection, setSelection] = React.useState<Record<string, ContentToolsEntry>>({});
 
   React.useEffect(() => {
     let cancelled = false;
@@ -51,7 +52,7 @@ const SettingsPage = () => {
         setSelection((res.data as any)?.config ?? {});
       })
       .catch(() => {
-        toggleNotification({ type: 'danger', message: 'Could not load the filter configuration.' });
+        toggleNotification({ type: 'danger', message: 'Could not load the configuration.' });
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -61,18 +62,23 @@ const SettingsPage = () => {
     };
   }, [get, toggleNotification]);
 
-  const isChecked = (uid: string, field: string) => (selection[uid] ?? []).includes(field);
+  const entryFor = (uid: string): ContentToolsEntry => selection[uid] ?? EMPTY;
 
-  const toggle = (uid: string, field: string) => {
+  const updateEntry = (uid: string, patch: Partial<ContentToolsEntry>) => {
     setSelection((prev) => {
-      const current = prev[uid] ?? [];
-      const next = current.includes(field)
-        ? current.filter((f) => f !== field)
-        : [...current, field];
+      const current = prev[uid] ?? EMPTY;
+      const next: ContentToolsEntry = { ...current, ...patch };
       const updated = { ...prev };
-      if (next.length) updated[uid] = next;
+      if (next.fields.length || next.export || next.import) updated[uid] = next;
       else delete updated[uid];
       return updated;
+    });
+  };
+
+  const toggleField = (uid: string, field: string) => {
+    const fields = entryFor(uid).fields;
+    updateEntry(uid, {
+      fields: fields.includes(field) ? fields.filter((f) => f !== field) : [...fields, field],
     });
   };
 
@@ -81,8 +87,8 @@ const SettingsPage = () => {
     try {
       const res = await put('/content-tools/config', { config: selection });
       setSelection((res.data as any) ?? selection);
-      clearFilterConfigCache();
-      toggleNotification({ type: 'success', message: 'Filter configuration saved.' });
+      clearContentToolsConfigCache();
+      toggleNotification({ type: 'success', message: 'Configuration saved.' });
     } catch {
       toggleNotification({ type: 'danger', message: 'Could not save the configuration.' });
     } finally {
@@ -97,7 +103,7 @@ const SettingsPage = () => {
       <Page.Main>
         <Layouts.Header
           title="Filters"
-          subtitle="Choose which fields become sticky list filters in the Content Manager, per content type."
+          subtitle="Per content type: choose the sticky list filters and enable export / import."
           primaryAction={
             <Button onClick={save} loading={saving} startIcon={<Check />}>
               Save
@@ -106,44 +112,87 @@ const SettingsPage = () => {
         />
         <Layouts.Content>
           <Flex direction="column" alignItems="stretch" gap={4}>
-            {contentTypes.map((ct) => (
-              <Box
-                key={ct.uid}
-                padding={5}
-                background="neutral0"
-                hasRadius
-                shadow="tableShadow"
-                borderColor="neutral150"
-              >
-                <Flex justifyContent="space-between" alignItems="baseline">
-                  <Typography variant="delta" tag="h2">
-                    {ct.displayName}
-                  </Typography>
-                  <Typography variant="pi" textColor="neutral500">
-                    {ct.uid}
-                  </Typography>
-                </Flex>
-                <Box paddingTop={3} paddingBottom={3}>
-                  <Divider />
+            {contentTypes.map((ct) => {
+              const entry = entryFor(ct.uid);
+              const attrs = Object.entries(ct.attributes);
+              return (
+                <Box
+                  key={ct.uid}
+                  padding={5}
+                  background="neutral0"
+                  hasRadius
+                  shadow="tableShadow"
+                  borderColor="neutral150"
+                >
+                  {/* header + action toggles */}
+                  <Flex justifyContent="space-between" alignItems="center" wrap="wrap" gap={3}>
+                    <Flex direction="column" alignItems="flex-start">
+                      <Typography variant="delta" tag="h2">
+                        {ct.displayName}
+                      </Typography>
+                      <Typography variant="pi" textColor="neutral500">
+                        {ct.uid}
+                      </Typography>
+                    </Flex>
+                    <Flex gap={5} alignItems="center">
+                      <Checkbox
+                        checked={entry.export}
+                        onCheckedChange={(v: boolean) => updateEntry(ct.uid, { export: !!v })}
+                      >
+                        <Flex gap={1} alignItems="center">
+                          <Download width="1.2rem" height="1.2rem" />
+                          <Typography>Export</Typography>
+                        </Flex>
+                      </Checkbox>
+                      <Checkbox
+                        checked={entry.import}
+                        onCheckedChange={(v: boolean) => updateEntry(ct.uid, { import: !!v })}
+                      >
+                        <Flex gap={1} alignItems="center">
+                          <Upload width="1.2rem" height="1.2rem" />
+                          <Typography>Import</Typography>
+                        </Flex>
+                      </Checkbox>
+                    </Flex>
+                  </Flex>
+
+                  <Box paddingTop={3} paddingBottom={4}>
+                    <Divider />
+                  </Box>
+
+                  {/* filter fields, grouped by kind */}
+                  <Flex direction="column" alignItems="stretch" gap={4}>
+                    {GROUPS.map((group) => {
+                      const groupAttrs = attrs.filter(([, a]) => group.match(a));
+                      if (groupAttrs.length === 0) return null;
+                      return (
+                        <Box key={group.key}>
+                          <Typography variant="sigma" textColor="neutral600">
+                            {group.label}
+                          </Typography>
+                          <Flex wrap="wrap" gap={4} paddingTop={2}>
+                            {groupAttrs.map(([name, attr]) => (
+                              <Checkbox
+                                key={name}
+                                checked={entry.fields.includes(name)}
+                                onCheckedChange={() => toggleField(ct.uid, name)}
+                              >
+                                <Flex direction="column" alignItems="flex-start">
+                                  <Typography>{prettyLabel(name)}</Typography>
+                                  <Typography variant="pi" textColor="neutral500">
+                                    {attrHint(attr)}
+                                  </Typography>
+                                </Flex>
+                              </Checkbox>
+                            ))}
+                          </Flex>
+                        </Box>
+                      );
+                    })}
+                  </Flex>
                 </Box>
-                <Flex wrap="wrap" gap={5}>
-                  {Object.entries(ct.attributes).map(([name, attr]) => (
-                    <Checkbox
-                      key={name}
-                      checked={isChecked(ct.uid, name)}
-                      onCheckedChange={() => toggle(ct.uid, name)}
-                    >
-                      <Flex direction="column" alignItems="flex-start">
-                        <Typography>{prettyLabel(name)}</Typography>
-                        <Typography variant="pi" textColor="neutral500">
-                          {attrHint(attr)}
-                        </Typography>
-                      </Flex>
-                    </Checkbox>
-                  ))}
-                </Flex>
-              </Box>
-            ))}
+              );
+            })}
           </Flex>
         </Layouts.Content>
       </Page.Main>

@@ -2,17 +2,31 @@ import * as React from 'react';
 import { Download } from '@strapi/icons';
 import { useFetchClient, useNotification } from '@strapi/strapi/admin';
 
+import { fetchContentToolsConfig } from '../utils/configClient';
+
 /**
  * List-view bulk action: "Export selected".
- * Downloads a ZIP (entities + media + folder structure) of the selected
- * entries. The archive is returned base64-encoded so it flows through the
- * authenticated fetch client, then decoded to a Blob for download.
+ * Only shown when export is enabled for this content type in
+ * Settings → Content Tools → Filters. Downloads a ZIP (entities + media +
+ * folder structure); the archive is returned base64-encoded so it flows
+ * through the authenticated fetch client, then decoded to a Blob.
  */
 const exportBulkAction = ({ collectionType, model, documents }: any) => {
-  const { post } = useFetchClient();
+  const { post, get } = useFetchClient();
   const { toggleNotification } = useNotification();
 
-  if (collectionType !== 'collection-types') return null;
+  const [enabled, setEnabled] = React.useState(false);
+  React.useEffect(() => {
+    let cancelled = false;
+    fetchContentToolsConfig(get).then((cfg) => {
+      if (!cancelled) setEnabled(!!cfg[model]?.export);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [get, model]);
+
+  if (collectionType !== 'collection-types' || !enabled) return null;
   if (!Array.isArray(documents) || documents.length === 0) return null;
 
   const documentIds = documents.map((d: any) => d?.documentId).filter(Boolean);
