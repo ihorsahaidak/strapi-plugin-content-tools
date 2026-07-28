@@ -151,6 +151,29 @@ const DataTransferPage = () => {
               </Box>
             ) : null}
 
+            {/* what the fields mean */}
+            <Box padding={4} hasRadius background="neutral0" borderColor="neutral150" shadow="tableShadow">
+              <Typography variant="delta" tag="h2">
+                How it works
+              </Typography>
+              <Box paddingTop={2}>
+                <Typography tag="p" textColor="neutral700">
+                  <b>Strapi URL</b> — the base address of the environment you want to copy data{' '}
+                  <i>from</i> (e.g. <code>https://your-strapi.example.com</code>). Don&apos;t add{' '}
+                  <code>/admin</code>; it&apos;s appended automatically. The source must run the same
+                  Strapi version as this one.
+                </Typography>
+              </Box>
+              <Box paddingTop={2}>
+                <Typography tag="p" textColor="neutral700">
+                  <b>Transfer token</b> — created in the <i>source</i> environment&apos;s admin under{' '}
+                  <b>Settings → Transfer Tokens</b> (choose <b>Pull</b> or <b>Full access</b>). This
+                  is a dedicated transfer token — an API token will <b>not</b> work. It&apos;s stored
+                  masked and only used to authenticate the pull.
+                </Typography>
+              </Box>
+            </Box>
+
             {/* danger note */}
             <Box padding={4} hasRadius background="danger100" borderColor="danger200">
               <Typography textColor="danger700">
