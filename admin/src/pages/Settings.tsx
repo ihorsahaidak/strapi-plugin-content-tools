@@ -205,8 +205,8 @@ const SettingsPage = () => {
             </Modal.Header>
             <Modal.Body>
               <Typography textColor="neutral700">
-                Configuration saved. Reload the page so the filters and the
-                export / import buttons update across the Content Manager.
+                Configuration saved. Reload the page for the changes to take
+                effect across the Content Manager.
               </Typography>
             </Modal.Body>
             <Modal.Footer>
