@@ -50,6 +50,30 @@ module.exports = {
         handler: 'transfer.importEntities',
         config: { policies: [] },
       },
+      {
+        method: 'GET',
+        path: '/data-transfer/targets',
+        handler: 'data-transfer.targets',
+        config: { policies: [] },
+      },
+      {
+        method: 'PUT',
+        path: '/data-transfer/targets',
+        handler: 'data-transfer.saveTargets',
+        config: { policies: [] },
+      },
+      {
+        method: 'POST',
+        path: '/data-transfer/pull',
+        handler: 'data-transfer.pull',
+        config: { policies: [] },
+      },
+      {
+        method: 'GET',
+        path: '/data-transfer/status',
+        handler: 'data-transfer.status',
+        config: { policies: [] },
+      },
     ],
   },
 };

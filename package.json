@@ -46,6 +46,7 @@
     "jszip": "^3.10.1"
   },
   "devDependencies": {
+    "@strapi/data-transfer": "^5.0.0",
     "@strapi/design-system": "^2.0.0",
     "@strapi/icons": "^2.0.0",
     "@strapi/sdk-plugin": "^5.3.2",
@@ -61,6 +62,7 @@
     "typescript": "^5.5.4"
   },
   "peerDependencies": {
+    "@strapi/data-transfer": "^5.0.0",
     "@strapi/design-system": "^2.0.0",
     "@strapi/icons": "^2.0.0",
     "@strapi/strapi": "^5.0.0",
