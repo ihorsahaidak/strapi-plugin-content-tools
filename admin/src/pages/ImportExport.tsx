@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Box, Flex, Typography, Button, Checkbox, Modal } from '@strapi/design-system';
+import { Box, Flex, Typography, Button, Checkbox, Divider, Modal } from '@strapi/design-system';
 import { Check, Download, Upload, ArrowClockwise } from '@strapi/icons';
 import { Layouts, Page, useFetchClient, useNotification } from '@strapi/strapi/admin';
 
@@ -91,76 +91,57 @@ const ImportExportPage = () => {
           }
         />
         <Layouts.Content>
-          <Box background="neutral0" hasRadius shadow="tableShadow" borderColor="neutral150">
-            {/* column headers */}
-            <Flex
-              paddingLeft={5}
-              paddingRight={5}
-              paddingTop={3}
-              paddingBottom={3}
-              background="neutral100"
-              justifyContent="space-between"
-            >
-              <Typography variant="sigma" textColor="neutral600">
-                Content type
-              </Typography>
-              <Flex gap={6}>
-                <Typography variant="sigma" textColor="neutral600">
-                  Export
-                </Typography>
-                <Typography variant="sigma" textColor="neutral600">
-                  Import
-                </Typography>
-              </Flex>
-            </Flex>
-
+          <Flex direction="column" alignItems="stretch" gap={4}>
             {contentTypes.map((ct) => {
               const entry = entryFor(ct.uid);
               return (
-                <Flex
+                <Box
                   key={ct.uid}
-                  paddingLeft={5}
-                  paddingRight={5}
-                  paddingTop={3}
-                  paddingBottom={3}
-                  justifyContent="space-between"
-                  alignItems="center"
+                  padding={5}
+                  background="neutral0"
+                  hasRadius
+                  shadow="tableShadow"
                   borderColor="neutral150"
-                  style={{ borderTop: '1px solid' }}
                 >
+                  {/* header */}
                   <Flex direction="column" alignItems="flex-start">
-                    <Typography fontWeight="semiBold">{ct.displayName}</Typography>
+                    <Typography variant="delta" tag="h2">
+                      {ct.displayName}
+                    </Typography>
                     <Typography variant="pi" textColor="neutral500">
                       {ct.uid}
                     </Typography>
                   </Flex>
-                  <Flex gap={6} alignItems="center">
-                    <Flex width="4rem" justifyContent="center">
-                      <Checkbox
-                        aria-label={`Enable export for ${ct.displayName}`}
-                        checked={entry.export}
-                        onCheckedChange={(v: boolean) => setFlag(ct.uid, 'export', !!v)}
-                      />
-                    </Flex>
-                    <Flex width="4rem" justifyContent="center">
-                      <Checkbox
-                        aria-label={`Enable import for ${ct.displayName}`}
-                        checked={entry.import}
-                        onCheckedChange={(v: boolean) => setFlag(ct.uid, 'import', !!v)}
-                      />
-                    </Flex>
+
+                  <Box paddingTop={3} paddingBottom={4}>
+                    <Divider />
+                  </Box>
+
+                  {/* action toggles */}
+                  <Flex wrap="wrap" gap={5}>
+                    <Checkbox
+                      checked={entry.export}
+                      onCheckedChange={(v: boolean) => setFlag(ct.uid, 'export', !!v)}
+                    >
+                      <Flex gap={1} alignItems="center">
+                        <Download width="1.2rem" height="1.2rem" />
+                        <Typography>Export</Typography>
+                      </Flex>
+                    </Checkbox>
+                    <Checkbox
+                      checked={entry.import}
+                      onCheckedChange={(v: boolean) => setFlag(ct.uid, 'import', !!v)}
+                    >
+                      <Flex gap={1} alignItems="center">
+                        <Upload width="1.2rem" height="1.2rem" />
+                        <Typography>Import</Typography>
+                      </Flex>
+                    </Checkbox>
                   </Flex>
-                </Flex>
+                </Box>
               );
             })}
-          </Box>
-
-          <Box paddingTop={3}>
-            <Typography variant="pi" textColor="neutral600">
-              <Download width="0.9rem" height="0.9rem" /> Export adds a bulk action to the list view.{' '}
-              <Upload width="0.9rem" height="0.9rem" /> Import adds a button to the list toolbar.
-            </Typography>
-          </Box>
+          </Flex>
         </Layouts.Content>
 
         <Modal.Root open={showReload} onOpenChange={setShowReload}>
