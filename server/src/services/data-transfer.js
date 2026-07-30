@@ -4,17 +4,24 @@
  * Pull all content + media from a remote Strapi environment into this one, using
  * the built-in @strapi/data-transfer engine (same as the `strapi transfer` CLI).
  *
- * Safety model (why this file is more than a thin wrapper):
- *   1. A pull runs `strategy: 'restore'` — it DELETES local content, then
- *      re-imports from the source. If it is interrupted or errors halfway you
- *      are left with a half-wiped database and orphaned/broken media.
- *   2. So before every pull we take a FULL native backup of the current
- *      environment (content + files) to a local .tar.gz using the same engine.
- *   3. The whole job (backup → transfer) runs in the background; the admin page
- *      polls getStatus() and now sees live counts + a percentage estimate, so it
- *      is obvious whether it is progressing or stuck.
- *   4. "Force stop" aborts the running transfer (engine.abortTransfer()) and then
- *      restores the pre-pull backup, returning you to exactly the pre-pull state.
+ * Safety model — a pull is DECOUPLED into download-then-apply so the destructive
+ * step is never gated on a slow network stream (the old live streaming restore
+ * held a DB transaction open for the whole transfer, starving the admin, and left
+ * the DB half-wiped on any mid-stream failure):
+ *   1. backup   — export the current environment (content + files) to a local
+ *                 .tar.gz. This is the rollback point.
+ *   2. download — stream the remote into a second local .tar.gz. Long and
+ *                 network-bound, but writes only to a file: the local DB is not
+ *                 touched, so the admin stays responsive and a failure/stop here
+ *                 leaves local data completely intact.
+ *   3. restore  — delete-then-import the downloaded tar. The ONLY destructive
+ *                 step; it reads a fast local file, so the DB-lock window is short
+ *                 and predictable. On failure it rolls back to the phase-1 backup.
+ *
+ * The job runs in the background; the admin page polls getStatus() for live
+ * per-phase counts + a percentage (exact during restore — the tar's counts are
+ * known). "Force stop" aborts the running engine (engine.abortTransfer());
+ * depending on the phase it either leaves data untouched or rolls back.
  *
  * Saved targets ({ id, name, url, token }) live in the plugin store.
  */
@@ -179,11 +186,19 @@ module.exports = ({ strapi }) => {
       }
       if (typeof onTick === 'function') onTick();
     };
+    const verb =
+      status.step === 'restore'
+        ? 'Restoring'
+        : status.step === 'download'
+          ? 'Downloading'
+          : status.step === 'backup'
+            ? 'Backing up'
+            : 'Transferring';
     try {
       const s = engine.progress?.stream;
       if (s && typeof s.on === 'function') {
         s.on('stage::start', ({ stage } = {}) => {
-          if (stage) status.phase = `${status.step === 'restore' ? 'Restoring' : 'Transferring'} ${stage}…`;
+          if (stage) status.phase = `${verb} ${stage}…`;
           refresh();
         });
         s.on('stage::progress', refresh);
@@ -300,12 +315,60 @@ module.exports = ({ strapi }) => {
     return meta;
   };
 
+  /* ---------------------------------------------------------- download */
+
+  // Phase 1 of a pull: stream the remote environment into a LOCAL .tar.gz.
+  // This is the long, network-bound phase — but it writes only to a file, never
+  // to the local DB, so the admin stays fully responsive and, crucially, if it
+  // fails or is aborted the local data is completely untouched.
+  const downloadRemote = async (target) => {
+    await fs.promises.mkdir(backupDir(), { recursive: true });
+    const id = crypto.randomUUID();
+    const base = path.join(
+      backupDir(),
+      `remote-download-${new Date().toISOString().replace(/[:.]/g, '-')}-${id.slice(0, 8)}`
+    );
+
+    const source = dtStrapi.providers.createRemoteStrapiSourceProvider({
+      url: buildRemoteUrl(target.url),
+      auth: { type: 'token', token: target.token },
+    });
+    const destination = dtFile.providers.createLocalFileDestinationProvider({
+      file: { path: base, maxSizeJsonl: 256 * 1024 * 1024 },
+      encryption: { enabled: false },
+      compression: { enabled: true },
+    });
+
+    const engine = dtEngine.createTransferEngine(source, destination, engineOptions());
+    currentEngine = engine;
+    status.counts = emptyCounts();
+    const refresh = wireProgress(engine);
+    engine.diagnostics?.onDiagnostic?.(({ kind, details }) => {
+      if (kind === 'error') strapi.log.error(`[content-tools] download: ${details?.message}`);
+    });
+
+    await engine.transfer();
+    refresh();
+    currentEngine = null;
+
+    const file = `${base}.tar.gz`;
+    let bytes = 0;
+    try {
+      bytes = (await fs.promises.stat(file)).size;
+    } catch {
+      throw fail('BadRequest', 'Download produced no file — the source may be unreachable', 400);
+    }
+    const totals = sum(status.counts);
+    return { file, entities: totals.entities, assets: totals.assets, bytes };
+  };
+
   /* ------------------------------------------------------------- restore */
 
-  // Restore a previously-taken backup .tar.gz into this environment. Same
-  // delete-then-import semantics as a pull, but from OUR own snapshot.
-  const restoreBackupFile = async (file) => {
-    if (!fs.existsSync(file)) throw fail('BadRequest', 'Backup file is missing on disk', 400);
+  // Restore a .tar.gz (a backup, or a freshly downloaded remote snapshot) into
+  // this environment. Delete-then-import from a LOCAL file — fast and offline,
+  // so the destructive DB window is short and predictable.
+  const restoreFromFile = async (file) => {
+    if (!fs.existsSync(file)) throw fail('BadRequest', 'Archive file is missing on disk', 400);
 
     const source = dtFile.providers.createLocalFileSourceProvider({
       file: { path: file },
@@ -351,7 +414,7 @@ module.exports = ({ strapi }) => {
       finishedAt: null,
     };
     try {
-      await restoreBackupFile(meta.file);
+      await restoreFromFile(meta.file);
       status = { ...status, running: false, step: 'done', phase: 'Backup restored', percent: 100, finishedAt: Date.now() };
     } catch (err) {
       currentEngine = null;
@@ -415,35 +478,13 @@ module.exports = ({ strapi }) => {
 
   /* ---------------------------------------------------------------- pull */
 
-  const runTransfer = async (target) => {
-    const source = dtStrapi.providers.createRemoteStrapiSourceProvider({
-      url: buildRemoteUrl(target.url),
-      auth: { type: 'token', token: target.token },
-    });
-    const destination = dtStrapi.providers.createLocalStrapiDestinationProvider({
-      getStrapi: () => strapi,
-      autoDestroy: false,
-      strategy: 'restore',
-      restore: {
-        entities: { exclude: IGNORED_CONTENT_TYPES },
-        assets: true,
-        configuration: { webhook: false, coreStore: false },
-      },
-    });
-
-    const engine = dtEngine.createTransferEngine(source, destination, engineOptions());
-    currentEngine = engine;
-    status.counts = emptyCounts();
-    wireProgress(engine);
-    engine.diagnostics?.onDiagnostic?.(({ kind, details }) => {
-      if (kind === 'error') strapi.log.error(`[content-tools] transfer: ${details?.message}`);
-    });
-
-    await engine.transfer();
-    currentEngine = null;
-  };
-
-  // Background chain: backup → transfer. On stop/error, restore the backup.
+  // Background chain, three phases:
+  //   1. backup   — export current data to a local tar (rollback point)
+  //   2. download — stream the remote into a local tar (NON-destructive)
+  //   3. restore  — delete-then-import the downloaded tar (the only destructive
+  //                 step; runs from a fast local file, short DB-lock window)
+  // A failure or stop in phase 1/2 leaves local data untouched. A failure in
+  // phase 3 rolls back to the phase-1 backup.
   const runJob = async (target) => {
     // 1) Full safety backup of the current data.
     status = { ...status, step: 'backup', phase: 'Backing up current data…', counts: emptyCounts(), percent: null };
@@ -452,7 +493,6 @@ module.exports = ({ strapi }) => {
       backup = await createFullBackup('pre-pull');
       status = { ...status, backup };
     } catch (err) {
-      // No safe backup → do NOT proceed with a destructive pull.
       currentEngine = null;
       status = {
         ...status,
@@ -467,40 +507,69 @@ module.exports = ({ strapi }) => {
     }
 
     if (status.stopRequested) {
-      // Stopped during backup: nothing was changed, no restore needed.
       status = { ...status, running: false, step: 'stopped', phase: 'Stopped before any change', finishedAt: Date.now() };
       return;
     }
 
-    // Seed the % estimate from the last good pull, else from what we just backed
-    // up (local scale ≈ source scale) so the bar is meaningful on the first run.
-    const stored = await store().get({ key: ESTIMATE_KEY });
+    // 2) Download the remote into a local tar. Nothing local is touched yet, so
+    // a slow/broken source or a Force stop here is completely safe.
+    status = { ...status, step: 'download', phase: 'Downloading from source…', counts: emptyCounts(), percent: null };
+    let download = null;
+    try {
+      download = await downloadRemote(target);
+    } catch (err) {
+      currentEngine = null;
+      const stopped = status.stopRequested;
+      status = {
+        ...status,
+        running: false,
+        step: stopped ? 'stopped' : 'failed',
+        phase: stopped
+          ? 'Stopped during download — local data untouched'
+          : 'Download failed — local data untouched',
+        error: stopped ? null : err?.message || String(err),
+        finishedAt: Date.now(),
+      };
+      strapi.log.warn(`[content-tools] download ${stopped ? 'stopped' : 'failed'}: ${err?.message || err}`);
+      return;
+    }
+
+    if (status.stopRequested) {
+      await fs.promises.unlink(download.file).catch(() => {});
+      status = { ...status, running: false, step: 'stopped', phase: 'Stopped after download — local data untouched', finishedAt: Date.now() };
+      return;
+    }
+
+    // 3) Apply the downloaded snapshot. The estimate is now EXACT (we know the
+    // tar's counts), so the restore progress bar is accurate.
     status = {
       ...status,
-      step: 'transfer',
-      phase: 'Transferring…',
+      step: 'restore',
+      phase: 'Applying downloaded data…',
       counts: emptyCounts(),
       percent: null,
-      estimate: stored || { entities: backup.entities, assets: backup.assets },
+      estimate: { entities: download.entities, assets: download.assets },
     };
-
-    // 2) The actual pull.
     try {
-      await runTransfer(target);
-      const totals = sum(status.counts);
-      await store().set({ key: ESTIMATE_KEY, value: { entities: totals.entities, assets: totals.assets } });
+      await restoreFromFile(download.file);
+      await store().set({
+        key: ESTIMATE_KEY,
+        value: { entities: download.entities, assets: download.assets },
+      });
+      await fs.promises.unlink(download.file).catch(() => {});
       status = { ...status, running: false, step: 'done', phase: 'Pull finished', percent: 100, finishedAt: Date.now() };
       strapi.log.info('[content-tools] data transfer completed');
     } catch (err) {
       currentEngine = null;
       const stopped = status.stopRequested;
       strapi.log.warn(
-        `[content-tools] transfer ${stopped ? 'stopped by user' : 'failed'}: ${err?.message || err}`
+        `[content-tools] restore ${stopped ? 'stopped by user' : 'failed'}: ${err?.message || err}`
       );
-      // 3) Roll back to the pre-pull backup so you are never left half-restored.
-      status = { ...status, step: 'restore', phase: 'Rolling back to pre-pull backup…', percent: null, counts: emptyCounts() };
+      // Roll back to the pre-pull backup so you are never left half-restored.
+      status = { ...status, phase: 'Rolling back to pre-pull backup…', percent: null, counts: emptyCounts() };
       try {
-        await restoreBackupFile(backup.file);
+        await restoreFromFile(backup.file);
+        await fs.promises.unlink(download.file).catch(() => {});
         status = {
           ...status,
           running: false,
@@ -517,8 +586,8 @@ module.exports = ({ strapi }) => {
           ...status,
           running: false,
           step: 'failed',
-          phase: 'Transfer failed AND rollback failed — restore manually from the backup',
-          error: `transfer: ${err?.message || err}; rollback: ${restoreErr?.message || restoreErr}`,
+          phase: 'Restore failed AND rollback failed — restore manually from the backup',
+          error: `restore: ${err?.message || err}; rollback: ${restoreErr?.message || restoreErr}`,
           finishedAt: Date.now(),
         };
         strapi.log.error(`[content-tools] rollback failed: ${restoreErr?.stack || restoreErr}`);

@@ -25,7 +25,7 @@ type Bucket = { count: number; bytes: number };
 
 type TransferStatus = {
   running: boolean;
-  step?: 'idle' | 'backup' | 'transfer' | 'restore' | 'done' | 'failed' | 'stopped';
+  step?: 'idle' | 'backup' | 'download' | 'transfer' | 'restore' | 'done' | 'failed' | 'stopped';
   phase?: string | null;
   targetId?: string | null;
   targetName?: string | null;
@@ -71,6 +71,7 @@ const fmtElapsed = (ms: number) => {
 
 const stepLabel: Record<string, string> = {
   backup: 'Backing up',
+  download: 'Downloading',
   transfer: 'Transferring',
   restore: 'Restoring',
   done: 'Done',
