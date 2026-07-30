@@ -1,6 +1,6 @@
 {
   "name": "strapi-plugin-content-tools",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Content Manager productivity tools for Strapi 5: sticky per-content-type filters, move entries between languages, and export/import entries with their media.",
   "keywords": [
     "strapi",

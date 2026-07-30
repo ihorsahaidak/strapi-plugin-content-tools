@@ -69,6 +69,30 @@ module.exports = {
         config: { policies: [] },
       },
       {
+        method: 'POST',
+        path: '/data-transfer/stop',
+        handler: 'data-transfer.stop',
+        config: { policies: [] },
+      },
+      {
+        method: 'POST',
+        path: '/data-transfer/probe',
+        handler: 'data-transfer.probe',
+        config: { policies: [] },
+      },
+      {
+        method: 'GET',
+        path: '/data-transfer/backups',
+        handler: 'data-transfer.backups',
+        config: { policies: [] },
+      },
+      {
+        method: 'POST',
+        path: '/data-transfer/restore-backup',
+        handler: 'data-transfer.restoreBackup',
+        config: { policies: [] },
+      },
+      {
         method: 'GET',
         path: '/data-transfer/status',
         handler: 'data-transfer.status',

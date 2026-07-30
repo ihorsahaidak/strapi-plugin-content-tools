@@ -41,6 +41,42 @@ module.exports = ({ strapi }) => ({
     }
   },
 
+  // POST /content-tools/data-transfer/stop
+  async stop(ctx) {
+    try {
+      ctx.body = await service(strapi).stop();
+    } catch (err) {
+      sendError(strapi, ctx, err);
+    }
+  },
+
+  // POST /content-tools/data-transfer/probe  { targetId }  — fast pre-flight test
+  async probe(ctx) {
+    try {
+      ctx.body = await service(strapi).probe({ targetId: (ctx.request.body || {}).targetId });
+    } catch (err) {
+      sendError(strapi, ctx, err);
+    }
+  },
+
+  // GET /content-tools/data-transfer/backups
+  async backups(ctx) {
+    try {
+      ctx.body = await service(strapi).listBackups();
+    } catch (err) {
+      sendError(strapi, ctx, err);
+    }
+  },
+
+  // POST /content-tools/data-transfer/restore-backup  { backupId }
+  async restoreBackup(ctx) {
+    try {
+      ctx.body = await service(strapi).restoreBackup({ backupId: (ctx.request.body || {}).backupId });
+    } catch (err) {
+      sendError(strapi, ctx, err);
+    }
+  },
+
   // GET /content-tools/data-transfer/status
   async status(ctx) {
     ctx.body = service(strapi).getStatus();
