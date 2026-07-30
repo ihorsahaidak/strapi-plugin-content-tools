@@ -215,6 +215,8 @@ module.exports = ({ strapi }) => {
     for (const old of all.slice(MAX_BACKUPS)) {
       await fs.promises.unlink(old.file).catch(() => {});
     }
+    const kept = all.slice(0, MAX_BACKUPS);
+    await store().set({ key: BACKUPS_KEY, value: kept });
     return kept;
   };
 
