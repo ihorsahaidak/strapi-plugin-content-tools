@@ -225,6 +225,7 @@ const DataTransferPage = () => {
   const runPull = async (target: Target) => {
     setConfirmTarget(null);
     try {
+      await put('/content-tools/data-transfer/targets', { targets });
       const res = await post('/content-tools/data-transfer/pull', { targetId: target.id });
       setStatus((res.data as any) ?? { running: true, targetName: target.name });
       toggleNotification({ type: 'info', message: `Backup + pull from "${target.name}" started.` });

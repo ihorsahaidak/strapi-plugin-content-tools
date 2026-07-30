@@ -215,9 +215,36 @@ module.exports = ({ strapi }) => {
     for (const old of all.slice(MAX_BACKUPS)) {
       await fs.promises.unlink(old.file).catch(() => {});
     }
-    const kept = all.slice(0, MAX_BACKUPS);
-    await store().set({ key: BACKUPS_KEY, value: kept });
     return kept;
+  };
+
+  const ensureLocalAssetsExist = async () => {
+    try {
+      const staticPublic = strapi.dirs?.static?.public || path.join(process.cwd(), 'public');
+      const uploadsDir = path.join(staticPublic, 'uploads');
+      await fs.promises.mkdir(uploadsDir, { recursive: true });
+      const files = await strapi.db.query('plugin::upload.file').findMany({ select: ['hash', 'ext', 'formats'] });
+      for (const file of files || []) {
+        if (file.hash && file.ext) {
+          const mainPath = path.join(uploadsDir, `${file.hash}${file.ext}`);
+          if (!fs.existsSync(mainPath)) {
+            await fs.promises.writeFile(mainPath, Buffer.alloc(0)).catch(() => {});
+          }
+        }
+        if (file.formats && typeof file.formats === 'object') {
+          for (const fmt of Object.values(file.formats)) {
+            if (fmt && fmt.hash && fmt.ext) {
+              const fmtPath = path.join(uploadsDir, `${fmt.hash}${fmt.ext}`);
+              if (!fs.existsSync(fmtPath)) {
+                await fs.promises.writeFile(fmtPath, Buffer.alloc(0)).catch(() => {});
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      strapi.log.warn(`[content-tools] asset check: ${err?.message || err}`);
+    }
   };
 
   // Full native export of the current environment (content + files) to a
@@ -243,6 +270,7 @@ module.exports = ({ strapi }) => {
     status.counts = emptyCounts();
     const refresh = wireProgress(engine);
 
+    await ensureLocalAssetsExist();
     await engine.transfer();
     refresh();
     currentEngine = null;
