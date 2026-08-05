@@ -311,7 +311,7 @@ const DataTransferPage = () => {
       <Page.Main>
         <Layouts.Header
           title="Data Transfer"
-          subtitle="Pull content & media from another environment. A full backup is taken first, with live progress and a force-stop that rolls back."
+          subtitle="Pull content & media from another environment."
           primaryAction={
             <Button onClick={save} loading={saving} disabled={busy}>
               Save targets
@@ -436,7 +436,7 @@ const DataTransferPage = () => {
                 </Typography>
               </Box>
               <Box paddingTop={3} borderStyle="solid" borderWidth="1px 0 0 0" borderColor="neutral150">
-                <Box paddingTop={3}>
+                <Box>
                   <Typography tag="p" textColor="warning700">
                     Pulling replaces this environment&apos;s <b>content and media</b> with the
                     source&apos;s. Your <b>admin users, tokens and configuration are kept</b>. A{' '}
