@@ -186,6 +186,22 @@ module.exports = ({ strapi }) => {
 
   const notIgnored = (uid) => !IGNORED_CONTENT_TYPES.includes(uid);
 
+  // Cheap local entity count (COUNT queries only, no export) — used as the
+  // progress-bar denominator when the backup step is skipped, since that
+  // step is normally what produces this number "for free".
+  const countLocalEntities = async () => {
+    let total = 0;
+    for (const uid of Object.keys(strapi.contentTypes)) {
+      if (!notIgnored(uid)) continue;
+      try {
+        total += await strapi.db.query(uid).count();
+      } catch {
+        /* best-effort estimate only */
+      }
+    }
+    return total;
+  };
+
   // Slow/large remote assets can stall the source stream; the default 15s kills
   // them (→ ERR_STREAM_DESTROYED). Give assets much longer to arrive.
   const REMOTE_STREAM_TIMEOUT = 180000;
@@ -670,8 +686,20 @@ module.exports = ({ strapi }) => {
 
   // Roll back to the pre-pull backup and resolve the job as either "stopped"
   // (user-initiated Force stop — always auto-rolls-back) or "failed" (the
-  // rollback itself blew up, which needs a manual fix).
-  const rollBackAndFinish = async (backup, { stopped }) => {
+  // rollback itself blew up, which needs a manual fix). When the backup step
+  // was skipped for this run there is nothing to roll back to — say so.
+  const rollBackAndFinish = async (backup) => {
+    if (!backup) {
+      status = {
+        ...status,
+        running: false,
+        step: 'stopped',
+        phase: 'Stopped — no backup was taken (skipped), local data was not reverted',
+        percent: null,
+        finishedAt: Date.now(),
+      };
+      return;
+    }
     status = { ...status, step: 'restore', phase: 'Rolling back to pre-pull backup…', percent: null, counts: emptyCounts() };
     try {
       await restoreFromFile(backup.file, ['content', 'files']);
@@ -693,48 +721,58 @@ module.exports = ({ strapi }) => {
   };
 
   // Background chain:
-  //   1. backup  — export current data to a local tar (rollback point).
+  //   1. backup  — optional (includeBackup); export current data to a local
+  //                tar (rollback point). Skipping it trades away the safety
+  //                net for a faster pull: Force stop / a failure can then only
+  //                report what happened, not undo it.
   //   2. content — direct remote→local restore of entities + links ONLY.
   //                Schema/version-lenient. Commits on its own. On Force stop
-  //                it rolls back automatically; on any OTHER failure the
-  //                backup is left in place and the job just reports "failed" —
-  //                the admin page asks before applying it, it's never silent.
+  //                it rolls back automatically (if a backup exists); on any
+  //                OTHER failure the backup (if any) is left in place and the
+  //                job just reports "failed" — the admin page asks before
+  //                applying it, it's never restored silently.
   //   3. media   — skipped when includeMedia is false. Downloads each file's
   //                bytes from the source and regenerates its thumbnail/
   //                responsive formats locally (see pullMediaFromTarget).
   //                Best effort; never rolls back content.
   //   On success (or a stopped-and-rolled-back run) the backup is discarded —
   //   only a genuinely failed, unresolved pull leaves one behind.
-  const runJob = async (target, { includeMedia }) => {
-    // 1) Full safety backup of the current data.
-    status = { ...status, step: 'backup', phase: 'Backing up current data…', counts: emptyCounts(), percent: null };
+  const runJob = async (target, { includeMedia, includeBackup }) => {
+    // 1) Full safety backup of the current data (optional).
     let backup = null;
-    try {
-      backup = await createFullBackup('pre-pull');
-      status = { ...status, backup };
-    } catch (err) {
-      currentEngine = null;
-      status = {
-        ...status,
-        running: false,
-        step: 'failed',
-        phase: 'Backup failed — pull aborted (data untouched)',
-        error: err?.message || String(err),
-        finishedAt: Date.now(),
-      };
-      strapi.log.error(`[content-tools] pre-pull backup failed, pull aborted: ${err?.stack || err}`);
-      return;
-    }
+    if (includeBackup) {
+      status = { ...status, step: 'backup', phase: 'Backing up current data…', counts: emptyCounts(), percent: null };
+      try {
+        backup = await createFullBackup('pre-pull');
+        status = { ...status, backup };
+      } catch (err) {
+        currentEngine = null;
+        status = {
+          ...status,
+          running: false,
+          step: 'failed',
+          phase: 'Backup failed — pull aborted (data untouched)',
+          error: err?.message || String(err),
+          finishedAt: Date.now(),
+        };
+        strapi.log.error(`[content-tools] pre-pull backup failed, pull aborted: ${err?.stack || err}`);
+        return;
+      }
 
-    if (status.stopRequested) {
+      if (status.stopRequested) {
+        status = { ...status, running: false, step: 'stopped', phase: 'Stopped before any change', finishedAt: Date.now() };
+        await discardBackup(backup.id);
+        return;
+      }
+    } else if (status.stopRequested) {
       status = { ...status, running: false, step: 'stopped', phase: 'Stopped before any change', finishedAt: Date.now() };
-      await discardBackup(backup.id);
       return;
     }
 
     // Entities denominator for the "X / Y" progress display: the backup we
-    // just took, i.e. this environment's own current scale — fresh every run.
-    const estEntities = backup.entities || 0;
+    // just took (this environment's own current scale, fresh every run), or —
+    // when the backup was skipped — a direct local count instead.
+    const estEntities = backup ? backup.entities || 0 : await countLocalEntities();
 
     // 2) Pull CONTENT (entities + links) — this is the important part and it
     // commits on its own, independent of media.
@@ -754,15 +792,17 @@ module.exports = ({ strapi }) => {
       const stopped = status.stopRequested;
       strapi.log.warn(`[content-tools] content pull ${stopped ? 'stopped by user' : 'failed'}: ${err?.message || err}`);
       if (stopped) {
-        await rollBackAndFinish(backup, { stopped: true });
+        await rollBackAndFinish(backup);
       } else {
-        // Genuine failure: do NOT auto-restore. Keep the backup and let the
-        // admin page ask whether to apply it.
+        // Genuine failure: do NOT auto-restore. Keep the backup (if any) and
+        // let the admin page ask whether to apply it.
         status = {
           ...status,
           running: false,
           step: 'failed',
-          phase: 'Pull failed — content may be partially updated. Apply the backup below to undo it.',
+          phase: backup
+            ? 'Pull failed — content may be partially updated. Apply the backup below to undo it.'
+            : 'Pull failed — content may be partially updated. No backup was taken (skipped), so this cannot be undone.',
           error: err?.message || String(err),
           finishedAt: Date.now(),
         };
@@ -798,12 +838,12 @@ module.exports = ({ strapi }) => {
 
     // Force stop (after content committed) → honour the rollback promise.
     if (status.stopRequested) {
-      await rollBackAndFinish(backup, { stopped: true });
+      await rollBackAndFinish(backup);
       return;
     }
 
-    // Success: the backup has served its purpose, drop it.
-    await discardBackup(backup.id);
+    // Success: the backup (if one was taken) has served its purpose, drop it.
+    if (backup) await discardBackup(backup.id);
     status = {
       ...status,
       running: false,
@@ -821,7 +861,7 @@ module.exports = ({ strapi }) => {
     );
   };
 
-  const pull = async ({ targetId, skipMedia }) => {
+  const pull = async ({ targetId, skipMedia, skipBackup }) => {
     if (status.running) throw fail('ConflictError', 'A transfer is already running', 409);
 
     const target = await findTarget(targetId);
@@ -833,13 +873,15 @@ module.exports = ({ strapi }) => {
     }
 
     const includeMedia = !skipMedia;
+    const includeBackup = !skipBackup;
     status = {
       running: true,
-      step: 'backup',
+      step: includeBackup ? 'backup' : 'transfer',
       phase: 'Starting…',
       targetId: target.id,
       targetName: target.name,
       includeMedia,
+      includeBackup,
       counts: emptyCounts(),
       estimate: null,
       percent: null,
@@ -851,7 +893,7 @@ module.exports = ({ strapi }) => {
     };
 
     // Fire-and-forget; the admin page polls getStatus().
-    runJob(target, { includeMedia }).catch((err) => {
+    runJob(target, { includeMedia, includeBackup }).catch((err) => {
       currentEngine = null;
       status = {
         ...status,

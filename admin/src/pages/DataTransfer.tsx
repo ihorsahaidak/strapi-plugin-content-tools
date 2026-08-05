@@ -39,6 +39,8 @@ type TransferStatus = {
   phase?: string | null;
   targetId?: string | null;
   targetName?: string | null;
+  includeMedia?: boolean;
+  includeBackup?: boolean;
   counts?: { entities: Bucket; links: Bucket; assets: Bucket; configuration: Bucket };
   estimate?: { entities: number; assets: number } | null;
   percent?: number | null;
@@ -132,6 +134,7 @@ const DataTransferPage = () => {
   const [backups, setBackups] = React.useState<Backup[]>([]);
   const [confirmTarget, setConfirmTarget] = React.useState<Target | null>(null);
   const [skipMedia, setSkipMedia] = React.useState(false);
+  const [skipBackup, setSkipBackup] = React.useState(false);
   const [confirmStop, setConfirmStop] = React.useState(false);
   const [confirmRestore, setConfirmRestore] = React.useState<Backup | null>(null);
   const [testingId, setTestingId] = React.useState<string | null>(null);
@@ -241,11 +244,12 @@ const DataTransferPage = () => {
       const res = await post('/content-tools/data-transfer/pull', {
         targetId: target.id,
         skipMedia,
+        skipBackup,
       });
       setStatus((res.data as any) ?? { running: true, targetName: target.name });
       toggleNotification({
-        type: 'info',
-        message: `Backup + pull from "${target.name}" started${skipMedia ? ' (content only)' : ''}.`,
+        type: skipBackup ? 'warning' : 'info',
+        message: `${skipBackup ? 'Pull' : 'Backup + pull'} from "${target.name}" started${skipMedia ? ' (content only)' : ''}${skipBackup ? ' — no safety net' : ''}.`,
       });
     } catch (err: any) {
       toggleNotification({
@@ -403,6 +407,8 @@ const DataTransferPage = () => {
                           status.backup.assets
                         )} assets · ${fmtBytes(status.backup.bytes)}`}
                       />
+                    ) : status.includeBackup === false ? (
+                      <Stat label="Backup" value="Skipped — no safety net" />
                     ) : null}
                   </Flex>
                 </Flex>
@@ -422,7 +428,7 @@ const DataTransferPage = () => {
                   Strapi version as this one — use <b>Test</b> to check.
                 </Typography>
               </Box>
-              <Box paddingTop={2}>
+              <Box paddingTop={3} paddingBottom={3}>
                 <Typography tag="p" textColor="neutral700">
                   <b>Transfer token</b> — created in the <i>source</i> environment&apos;s admin under{' '}
                   <b>Settings → Transfer Tokens</b> (choose <b>Pull</b> or <b>Full access</b>). An API
@@ -569,16 +575,28 @@ const DataTransferPage = () => {
         <Modal.Root open={!!confirmTarget} onOpenChange={() => setConfirmTarget(null)}>
           <Modal.Content>
             <Modal.Header>
-              <Modal.Title>Backup &amp; pull?</Modal.Title>
+              <Modal.Title>{skipBackup ? 'Pull without a backup?' : 'Backup & pull?'}</Modal.Title>
             </Modal.Header>
             <Modal.Body>
               <Typography textColor="neutral700">
-                This first takes a <b>full backup</b> of the current content &amp; media, then pulls{' '}
-                <b>content</b> from <b>{confirmTarget?.name || confirmTarget?.url}</b>, then downloads and{' '}
-                <b>resizes every media file</b> locally (unless skipped) so it renders correctly here and
-                on the website. Admin users, tokens and config are kept. <b>Force stop</b> aborts and
-                restores the backup immediately; if the pull fails on its own, you&apos;ll be asked
-                whether to apply the backup instead.
+                {skipBackup ? (
+                  <>
+                    No backup will be taken. This pulls <b>content</b> from{' '}
+                    <b>{confirmTarget?.name || confirmTarget?.url}</b>, then downloads and{' '}
+                    <b>resizes every media file</b> locally (unless skipped). Admin users, tokens and
+                    config are kept, but if the pull fails or you hit <b>Force stop</b> partway through,{' '}
+                    <b>there is nothing to undo it with</b> — only choose this for a quick/low-risk pull.
+                  </>
+                ) : (
+                  <>
+                    This first takes a <b>full backup</b> of the current content &amp; media, then pulls{' '}
+                    <b>content</b> from <b>{confirmTarget?.name || confirmTarget?.url}</b>, then downloads
+                    and <b>resizes every media file</b> locally (unless skipped) so it renders correctly
+                    here and on the website. Admin users, tokens and config are kept. <b>Force stop</b>{' '}
+                    aborts and restores the backup immediately; if the pull fails on its own, you&apos;ll
+                    be asked whether to apply the backup instead.
+                  </>
+                )}
               </Typography>
               <Box paddingTop={4}>
                 <Checkbox
@@ -586,6 +604,14 @@ const DataTransferPage = () => {
                   onCheckedChange={(v: boolean | 'indeterminate') => setSkipMedia(v === true)}
                 >
                   Skip media — pull content only (recommended if the source has broken images)
+                </Checkbox>
+              </Box>
+              <Box paddingTop={2}>
+                <Checkbox
+                  checked={skipBackup}
+                  onCheckedChange={(v: boolean | 'indeterminate') => setSkipBackup(v === true)}
+                >
+                  Skip backup — faster, but Force stop / a failed pull can&apos;t be undone
                 </Checkbox>
               </Box>
             </Modal.Body>
@@ -598,7 +624,7 @@ const DataTransferPage = () => {
                 startIcon={<ArrowClockwise />}
                 onClick={() => confirmTarget && runPull(confirmTarget)}
               >
-                Backup &amp; pull
+                {skipBackup ? 'Pull (no backup)' : 'Backup & pull'}
               </Button>
             </Modal.Footer>
           </Modal.Content>
