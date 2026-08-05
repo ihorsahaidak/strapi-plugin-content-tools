@@ -9,6 +9,7 @@ import {
   Modal,
   Status,
   Loader,
+  Checkbox,
 } from '@strapi/design-system';
 import { Plus, Trash, ArrowClockwise, Stop, Play } from '@strapi/icons';
 import { Layouts, Page, useFetchClient, useNotification } from '@strapi/strapi/admin';
@@ -25,14 +26,23 @@ type Bucket = { count: number; bytes: number };
 
 type TransferStatus = {
   running: boolean;
-  step?: 'idle' | 'backup' | 'download' | 'transfer' | 'restore' | 'done' | 'failed' | 'stopped';
+  step?:
+    | 'idle'
+    | 'backup'
+    | 'download'
+    | 'transfer'
+    | 'restore'
+    | 'assets'
+    | 'done'
+    | 'failed'
+    | 'stopped';
   phase?: string | null;
   targetId?: string | null;
   targetName?: string | null;
   counts?: { entities: Bucket; links: Bucket; assets: Bucket; configuration: Bucket };
   estimate?: { entities: number; assets: number } | null;
   percent?: number | null;
-  backup?: { entities: number; assets: number; bytes: number; createdAt: string } | null;
+  backup?: { id: string; entities: number; assets: number; bytes: number; createdAt: string } | null;
   error?: string | null;
   stopRequested?: boolean;
   startedAt?: number | null;
@@ -71,9 +81,9 @@ const fmtElapsed = (ms: number) => {
 
 const stepLabel: Record<string, string> = {
   backup: 'Backing up',
-  download: 'Downloading',
-  transfer: 'Transferring',
-  restore: 'Restoring',
+  transfer: 'Pulling content',
+  assets: 'Resizing media',
+  restore: 'Rolling back',
   done: 'Done',
   failed: 'Failed',
   stopped: 'Stopped',
@@ -121,6 +131,7 @@ const DataTransferPage = () => {
   const [status, setStatus] = React.useState<TransferStatus>({ running: false });
   const [backups, setBackups] = React.useState<Backup[]>([]);
   const [confirmTarget, setConfirmTarget] = React.useState<Target | null>(null);
+  const [skipMedia, setSkipMedia] = React.useState(false);
   const [confirmStop, setConfirmStop] = React.useState(false);
   const [confirmRestore, setConfirmRestore] = React.useState<Backup | null>(null);
   const [testingId, setTestingId] = React.useState<string | null>(null);
@@ -227,9 +238,15 @@ const DataTransferPage = () => {
     setConfirmTarget(null);
     try {
       await put('/content-tools/data-transfer/targets', { targets });
-      const res = await post('/content-tools/data-transfer/pull', { targetId: target.id });
+      const res = await post('/content-tools/data-transfer/pull', {
+        targetId: target.id,
+        skipMedia,
+      });
       setStatus((res.data as any) ?? { running: true, targetName: target.name });
-      toggleNotification({ type: 'info', message: `Backup + pull from "${target.name}" started.` });
+      toggleNotification({
+        type: 'info',
+        message: `Backup + pull from "${target.name}" started${skipMedia ? ' (content only)' : ''}.`,
+      });
     } catch (err: any) {
       toggleNotification({
         type: 'danger',
@@ -335,6 +352,15 @@ const DataTransferPage = () => {
                         Force stop &amp; roll back
                       </Button>
                     ) : null}
+                    {!busy && status.step === 'failed' && status.backup ? (
+                      <Button
+                        variant="danger-light"
+                        startIcon={<ArrowClockwise />}
+                        onClick={() => setConfirmRestore(status.backup as Backup)}
+                      >
+                        Apply pre-pull backup
+                      </Button>
+                    ) : null}
                   </Flex>
 
                   {busy || status.step === 'done' ? (
@@ -351,14 +377,28 @@ const DataTransferPage = () => {
                     </Box>
                   ) : null}
 
-                  {/* live counters */}
+                  {/* live counters — show "done / total" when an estimate exists */}
                   <Flex gap={6} wrap="wrap">
-                    <Stat label="Entities" value={fmtInt(totalEntities)} />
-                    <Stat label="Assets" value={fmtInt(totalAssets)} />
+                    <Stat
+                      label="Entities"
+                      value={
+                        status.estimate?.entities
+                          ? `${fmtInt(totalEntities)} / ${fmtInt(status.estimate.entities)}`
+                          : fmtInt(totalEntities)
+                      }
+                    />
+                    <Stat
+                      label="Media"
+                      value={
+                        status.estimate?.assets
+                          ? `${fmtInt(totalAssets)} / ${fmtInt(status.estimate.assets)}`
+                          : fmtInt(totalAssets)
+                      }
+                    />
                     <Stat label="Data" value={fmtBytes(totalBytes)} />
                     {status.backup ? (
                       <Stat
-                        label="Pre-pull backup"
+                        label={status.step === 'failed' ? 'Backup kept (undo available)' : 'Pre-pull backup'}
                         value={`${fmtInt(status.backup.entities)} entities · ${fmtInt(
                           status.backup.assets
                         )} assets · ${fmtBytes(status.backup.bytes)}`}
@@ -369,7 +409,7 @@ const DataTransferPage = () => {
               </Box>
             ) : null}
 
-            {/* what the fields mean */}
+            {/* what the fields mean + safety note, combined */}
             <Box padding={4} hasRadius background="neutral0" borderColor="neutral150" shadow="tableShadow">
               <Typography variant="delta" tag="h2">
                 How it works
@@ -389,16 +429,19 @@ const DataTransferPage = () => {
                   token will <b>not</b> work. It&apos;s stored masked and only used for the pull.
                 </Typography>
               </Box>
-            </Box>
-
-            {/* safety note */}
-            <Box padding={4} hasRadius background="warning100" borderColor="warning200">
-              <Typography textColor="warning700">
-                Pulling replaces this environment&apos;s <b>content and media</b> with the source&apos;s.
-                Your <b>admin users, tokens and configuration are kept</b>. A <b>full backup is taken
-                automatically before the pull</b>; if anything goes wrong — or you hit <b>Force stop</b>{' '}
-                — it is restored to the pre-pull state.
-              </Typography>
+              <Box paddingTop={3} borderStyle="solid" borderWidth="1px 0 0 0" borderColor="neutral150">
+                <Box paddingTop={3}>
+                  <Typography tag="p" textColor="warning700">
+                    Pulling replaces this environment&apos;s <b>content and media</b> with the
+                    source&apos;s. Your <b>admin users, tokens and configuration are kept</b>. A{' '}
+                    <b>full backup is taken automatically before the pull</b> and every image is
+                    re-downloaded and resized locally so it renders correctly here and on the website.
+                    Hit <b>Force stop</b> at any time to abort and restore that backup immediately; if
+                    the pull fails on its own, the backup is kept and you&apos;ll be asked whether to
+                    apply it — nothing is restored silently. A successful pull discards the backup.
+                  </Typography>
+                </Box>
+              </Box>
             </Box>
 
             {/* targets */}
@@ -482,8 +525,8 @@ const DataTransferPage = () => {
                   Backups
                 </Typography>
                 <Typography variant="pi" textColor="neutral600" tag="p">
-                  Automatic snapshots taken before each pull. Restore one to undo a pull. Newest {backups.length}
-                  kept.
+                  A successful pull discards its backup automatically — a backup only stays here when a
+                  pull failed and hasn&apos;t been resolved yet. Apply it to undo. Only one is ever kept.
                 </Typography>
                 <Box paddingTop={3}>
                   <Flex direction="column" alignItems="stretch" gap={2}>
@@ -530,11 +573,21 @@ const DataTransferPage = () => {
             </Modal.Header>
             <Modal.Body>
               <Typography textColor="neutral700">
-                This first takes a <b>full backup</b> of the current content &amp; media, then replaces
-                them with the data from <b>{confirmTarget?.name || confirmTarget?.url}</b>. Admin users,
-                tokens and config are kept. You can <b>Force stop</b> at any time to roll back to the
-                backup.
+                This first takes a <b>full backup</b> of the current content &amp; media, then pulls{' '}
+                <b>content</b> from <b>{confirmTarget?.name || confirmTarget?.url}</b>, then downloads and{' '}
+                <b>resizes every media file</b> locally (unless skipped) so it renders correctly here and
+                on the website. Admin users, tokens and config are kept. <b>Force stop</b> aborts and
+                restores the backup immediately; if the pull fails on its own, you&apos;ll be asked
+                whether to apply the backup instead.
               </Typography>
+              <Box paddingTop={4}>
+                <Checkbox
+                  checked={skipMedia}
+                  onCheckedChange={(v: boolean | 'indeterminate') => setSkipMedia(v === true)}
+                >
+                  Skip media — pull content only (recommended if the source has broken images)
+                </Checkbox>
+              </Box>
             </Modal.Body>
             <Modal.Footer>
               <Button variant="tertiary" onClick={() => setConfirmTarget(null)}>

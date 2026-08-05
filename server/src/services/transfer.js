@@ -231,30 +231,6 @@ module.exports = ({ strapi }) => {
     return { zip, count: entities.length, mediaCount: media.size };
   };
 
-  // Every distinct { documentId, locale } draft ref of a whole collection.
-  const collectAllRefs = async (uid) => {
-    const rows = await strapi.db
-      .query(uid)
-      .findMany({ select: ['documentId', 'locale'] });
-    const seen = new Set();
-    const refs = [];
-    for (const r of rows) {
-      if (!r.documentId) continue;
-      const key = `${r.documentId}::${r.locale ?? ''}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      refs.push({ documentId: r.documentId, locale: r.locale ?? undefined });
-    }
-    return refs;
-  };
-
-  // Raw nodebuffer archive (used by dumps).
-  const buildArchiveBuffer = async ({ uid, refs }) => {
-    const { zip, count, mediaCount } = await buildArchive({ uid, refs });
-    const buffer = await zip.generateAsync({ type: 'nodebuffer' });
-    return { buffer, count, mediaCount };
-  };
-
   const exportEntities = async ({ uid, documentIds, locale }) => {
     getSchema(uid);
     if (!Array.isArray(documentIds) || documentIds.length === 0) {
@@ -516,9 +492,6 @@ module.exports = ({ strapi }) => {
   return {
     exportEntities,
     importEntities,
-    // Reusable primitives for the dumps feature:
-    buildArchiveBuffer,
-    collectAllRefs,
     importArchive,
   };
 };

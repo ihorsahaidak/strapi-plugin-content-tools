@@ -98,42 +98,6 @@ module.exports = {
         handler: 'data-transfer.status',
         config: { policies: [] },
       },
-      {
-        method: 'GET',
-        path: '/dumps',
-        handler: 'dumps.overview',
-        config: { policies: [] },
-      },
-      {
-        method: 'PUT',
-        path: '/dumps/retention',
-        handler: 'dumps.setRetention',
-        config: { policies: [] },
-      },
-      {
-        method: 'POST',
-        path: '/dumps/create',
-        handler: 'dumps.create',
-        config: { policies: [] },
-      },
-      {
-        method: 'POST',
-        path: '/dumps/restore',
-        handler: 'dumps.restore',
-        config: { policies: [] },
-      },
-      {
-        method: 'POST',
-        path: '/dumps/ensure',
-        handler: 'dumps.ensure',
-        config: { policies: [] },
-      },
-      {
-        method: 'POST',
-        path: '/dumps/delete',
-        handler: 'dumps.remove',
-        config: { policies: [] },
-      },
     ],
   },
 };

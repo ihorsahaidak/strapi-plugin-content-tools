@@ -35,7 +35,8 @@ module.exports = ({ strapi }) => ({
   // POST /content-tools/data-transfer/pull  { targetId }
   async pull(ctx) {
     try {
-      ctx.body = await service(strapi).pull({ targetId: (ctx.request.body || {}).targetId });
+      const body = ctx.request.body || {};
+      ctx.body = await service(strapi).pull({ targetId: body.targetId, skipMedia: !!body.skipMedia });
     } catch (err) {
       sendError(strapi, ctx, err);
     }
