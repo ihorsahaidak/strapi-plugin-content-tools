@@ -134,8 +134,8 @@ const DataTransferPage = () => {
   const [backups, setBackups] = React.useState<Backup[]>([]);
   const [confirmTarget, setConfirmTarget] = React.useState<Target | null>(null);
   const [skipMedia, setSkipMedia] = React.useState(false);
-  const [skipBackup, setSkipBackup] = React.useState(false);
-  const [confirmStop, setConfirmStop] = React.useState(false);
+  // null = closed; otherwise which flavour of stop is being confirmed.
+  const [confirmStop, setConfirmStop] = React.useState<{ rollback: boolean } | null>(null);
   const [confirmRestore, setConfirmRestore] = React.useState<Backup | null>(null);
   const [testingId, setTestingId] = React.useState<string | null>(null);
   const [now, setNow] = React.useState(Date.now());
@@ -237,7 +237,7 @@ const DataTransferPage = () => {
     }
   };
 
-  const runPull = async (target: Target) => {
+  const runPull = async (target: Target, { skipBackup }: { skipBackup: boolean }) => {
     setConfirmTarget(null);
     try {
       await put('/content-tools/data-transfer/targets', { targets });
@@ -249,7 +249,7 @@ const DataTransferPage = () => {
       setStatus((res.data as any) ?? { running: true, targetName: target.name });
       toggleNotification({
         type: skipBackup ? 'warning' : 'info',
-        message: `${skipBackup ? 'Pull' : 'Backup + pull'} from "${target.name}" started${skipMedia ? ' (content only)' : ''}${skipBackup ? ' — no safety net' : ''}.`,
+        message: `${skipBackup ? 'Pull' : 'Backup + pull'} from "${target.name}" started${skipMedia ? ' (content only)' : ''}${skipBackup ? ' — no backup, this cannot be undone' : ''}.`,
       });
     } catch (err: any) {
       toggleNotification({
@@ -259,12 +259,17 @@ const DataTransferPage = () => {
     }
   };
 
-  const forceStop = async () => {
-    setConfirmStop(false);
+  const forceStop = async (rollback: boolean) => {
+    setConfirmStop(null);
     try {
-      const res = await post('/content-tools/data-transfer/stop', {});
+      const res = await post('/content-tools/data-transfer/stop', { rollback });
       setStatus((res.data as any) ?? status);
-      toggleNotification({ type: 'info', message: 'Stopping and rolling back to the pre-pull backup…' });
+      toggleNotification({
+        type: 'info',
+        message: rollback
+          ? 'Stopping and rolling back to the pre-pull backup…'
+          : 'Stopping — whatever already landed is kept.',
+      });
     } catch (err: any) {
       toggleNotification({
         type: 'danger',
@@ -352,11 +357,27 @@ const DataTransferPage = () => {
                       </Flex>
                     </Flex>
                     {busy ? (
-                      <Button variant="danger" startIcon={<Stop />} onClick={() => setConfirmStop(true)}>
-                        Force stop &amp; roll back
-                      </Button>
+                      <Flex gap={2}>
+                        <Button
+                          variant="secondary"
+                          startIcon={<Stop />}
+                          onClick={() => setConfirmStop({ rollback: false })}
+                        >
+                          Stop
+                        </Button>
+                        {/* Only offered when this run actually has a backup to return to. */}
+                        {status.backup ? (
+                          <Button
+                            variant="danger"
+                            startIcon={<Stop />}
+                            onClick={() => setConfirmStop({ rollback: true })}
+                          >
+                            Stop &amp; roll back
+                          </Button>
+                        ) : null}
+                      </Flex>
                     ) : null}
-                    {!busy && status.step === 'failed' && status.backup ? (
+                    {!busy && (status.step === 'failed' || status.step === 'stopped') && status.backup ? (
                       <Button
                         variant="danger-light"
                         startIcon={<ArrowClockwise />}
@@ -402,13 +423,17 @@ const DataTransferPage = () => {
                     <Stat label="Data" value={fmtBytes(totalBytes)} />
                     {status.backup ? (
                       <Stat
-                        label={status.step === 'failed' ? 'Backup kept (undo available)' : 'Pre-pull backup'}
-                        value={`${fmtInt(status.backup.entities)} entities · ${fmtInt(
-                          status.backup.assets
-                        )} assets · ${fmtBytes(status.backup.bytes)}`}
+                        label={
+                          status.step === 'failed' || status.step === 'stopped'
+                            ? 'Backup kept (undo available)'
+                            : 'Pre-pull backup'
+                        }
+                        value={`${fmtInt(status.backup.entities)} entities · ${fmtBytes(
+                          status.backup.bytes
+                        )}`}
                       />
                     ) : status.includeBackup === false ? (
-                      <Stat label="Backup" value="Skipped — no safety net" />
+                      <Stat label="Backup" value="Skipped — cannot undo" />
                     ) : null}
                   </Flex>
                 </Flex>
@@ -439,12 +464,13 @@ const DataTransferPage = () => {
                 <Box>
                   <Typography tag="p" textColor="warning700">
                     Pulling replaces this environment&apos;s <b>content and media</b> with the
-                    source&apos;s. Your <b>admin users, tokens and configuration are kept</b>. A{' '}
-                    <b>full backup is taken automatically before the pull</b> and every image is
-                    re-downloaded and resized locally so it renders correctly here and on the website.
-                    Hit <b>Force stop</b> at any time to abort and restore that backup immediately; if
-                    the pull fails on its own, the backup is kept and you&apos;ll be asked whether to
-                    apply it — nothing is restored silently. A successful pull discards the backup.
+                    source&apos;s, and every image is re-downloaded and resized locally so it renders
+                    correctly here and on the website. Your{' '}
+                    <b>admin users, tokens and configuration are kept</b>. You choose per pull whether to{' '}
+                    <b>back up first</b> (a content snapshot you can restore) or <b>just pull</b> (faster,
+                    but nothing can undo it). While a pull runs, <b>Stop</b> aborts and keeps what landed,
+                    and <b>Stop &amp; roll back</b> restores the backup — nothing is ever restored
+                    silently, and a successful pull discards its backup.
                   </Typography>
                 </Box>
               </Box>
@@ -550,7 +576,7 @@ const DataTransferPage = () => {
                             {new Date(b.createdAt).toLocaleString()}
                           </Typography>
                           <Typography variant="pi" textColor="neutral600">
-                            {fmtInt(b.entities)} entities · {fmtInt(b.assets)} assets · {fmtBytes(b.bytes)}
+                            {fmtInt(b.entities)} entities · {fmtBytes(b.bytes)}
                             {b.exists === false ? ' · ⚠ file missing' : ''}
                           </Typography>
                         </Flex>
@@ -575,29 +601,22 @@ const DataTransferPage = () => {
         <Modal.Root open={!!confirmTarget} onOpenChange={() => setConfirmTarget(null)}>
           <Modal.Content>
             <Modal.Header>
-              <Modal.Title>{skipBackup ? 'Pull without a backup?' : 'Backup & pull?'}</Modal.Title>
+              <Modal.Title>Pull from {confirmTarget?.name || confirmTarget?.url}?</Modal.Title>
             </Modal.Header>
             <Modal.Body>
               <Typography textColor="neutral700">
-                {skipBackup ? (
-                  <>
-                    No backup will be taken. This pulls <b>content</b> from{' '}
-                    <b>{confirmTarget?.name || confirmTarget?.url}</b>, then downloads and{' '}
-                    <b>resizes every media file</b> locally (unless skipped). Admin users, tokens and
-                    config are kept, but if the pull fails or you hit <b>Force stop</b> partway through,{' '}
-                    <b>there is nothing to undo it with</b> — only choose this for a quick/low-risk pull.
-                  </>
-                ) : (
-                  <>
-                    This first takes a <b>full backup</b> of the current content &amp; media, then pulls{' '}
-                    <b>content</b> from <b>{confirmTarget?.name || confirmTarget?.url}</b>, then downloads
-                    and <b>resizes every media file</b> locally (unless skipped) so it renders correctly
-                    here and on the website. Admin users, tokens and config are kept. <b>Force stop</b>{' '}
-                    aborts and restores the backup immediately; if the pull fails on its own, you&apos;ll
-                    be asked whether to apply the backup instead.
-                  </>
-                )}
+                This replaces this environment&apos;s <b>content</b> with{' '}
+                <b>{confirmTarget?.name || confirmTarget?.url}</b>&apos;s, then downloads and{' '}
+                <b>resizes every media file</b> locally (unless skipped) so it renders correctly here and
+                on the website. Admin users, tokens and config are kept.
               </Typography>
+              <Box paddingTop={3}>
+                <Typography tag="p" textColor="neutral700">
+                  <b>Back up first</b> — takes a content snapshot before pulling, so you can undo. Adds a
+                  few seconds. <b>Just pull</b> — skips it and starts immediately, but nothing can undo
+                  the pull afterwards.
+                </Typography>
+              </Box>
               <Box paddingTop={4}>
                 <Checkbox
                   checked={skipMedia}
@@ -606,48 +625,67 @@ const DataTransferPage = () => {
                   Skip media — pull content only (recommended if the source has broken images)
                 </Checkbox>
               </Box>
-              <Box paddingTop={2}>
-                <Checkbox
-                  checked={skipBackup}
-                  onCheckedChange={(v: boolean | 'indeterminate') => setSkipBackup(v === true)}
-                >
-                  Skip backup — faster, but Force stop / a failed pull can&apos;t be undone
-                </Checkbox>
-              </Box>
             </Modal.Body>
             <Modal.Footer>
               <Button variant="tertiary" onClick={() => setConfirmTarget(null)}>
                 Cancel
               </Button>
-              <Button
-                variant="danger"
-                startIcon={<ArrowClockwise />}
-                onClick={() => confirmTarget && runPull(confirmTarget)}
-              >
-                {skipBackup ? 'Pull (no backup)' : 'Backup & pull'}
-              </Button>
+              <Flex gap={2}>
+                <Button
+                  variant="secondary"
+                  startIcon={<ArrowClockwise />}
+                  onClick={() => confirmTarget && runPull(confirmTarget, { skipBackup: true })}
+                >
+                  Just pull (no backup)
+                </Button>
+                <Button
+                  variant="danger"
+                  startIcon={<ArrowClockwise />}
+                  onClick={() => confirmTarget && runPull(confirmTarget, { skipBackup: false })}
+                >
+                  Back up &amp; pull
+                </Button>
+              </Flex>
             </Modal.Footer>
           </Modal.Content>
         </Modal.Root>
 
-        {/* confirm force stop */}
-        <Modal.Root open={confirmStop} onOpenChange={() => setConfirmStop(false)}>
+        {/* confirm stop (with or without rollback) */}
+        <Modal.Root open={!!confirmStop} onOpenChange={() => setConfirmStop(null)}>
           <Modal.Content>
             <Modal.Header>
-              <Modal.Title>Force stop and roll back?</Modal.Title>
+              <Modal.Title>
+                {confirmStop?.rollback ? 'Stop and roll back?' : 'Stop the transfer?'}
+              </Modal.Title>
             </Modal.Header>
             <Modal.Body>
               <Typography textColor="neutral700">
-                This aborts the running transfer and restores the <b>pre-pull backup</b>, returning this
-                environment to exactly how it was before the pull started.
+                {confirmStop?.rollback ? (
+                  <>
+                    This aborts the running transfer and restores the <b>pre-pull backup</b>, returning
+                    this environment to how it was before the pull started.
+                  </>
+                ) : (
+                  <>
+                    This aborts the running transfer and <b>keeps whatever already landed</b> — the
+                    content may be partially updated.{' '}
+                    {status.backup
+                      ? 'The pre-pull backup is kept, so you can still apply it afterwards to undo.'
+                      : 'No backup was taken for this run, so this cannot be undone.'}
+                  </>
+                )}
               </Typography>
             </Modal.Body>
             <Modal.Footer>
-              <Button variant="tertiary" onClick={() => setConfirmStop(false)}>
+              <Button variant="tertiary" onClick={() => setConfirmStop(null)}>
                 Keep running
               </Button>
-              <Button variant="danger" startIcon={<Stop />} onClick={forceStop}>
-                Stop &amp; roll back
+              <Button
+                variant="danger"
+                startIcon={<Stop />}
+                onClick={() => forceStop(!!confirmStop?.rollback)}
+              >
+                {confirmStop?.rollback ? 'Stop & roll back' : 'Stop'}
               </Button>
             </Modal.Footer>
           </Modal.Content>
@@ -661,9 +699,10 @@ const DataTransferPage = () => {
             </Modal.Header>
             <Modal.Body>
               <Typography textColor="neutral700">
-                This replaces the current content &amp; media with the snapshot from{' '}
+                This replaces the current <b>content</b> with the snapshot from{' '}
                 <b>{confirmRestore ? new Date(confirmRestore.createdAt).toLocaleString() : ''}</b>. Admin
-                users, tokens and config are kept.
+                users, tokens and config are kept. Media files on disk are left untouched — the restored
+                content points back at the images it was using before the pull.
               </Typography>
             </Modal.Body>
             <Modal.Footer>

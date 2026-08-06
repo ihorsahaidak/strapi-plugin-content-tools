@@ -6,15 +6,19 @@
  * `strapi transfer` CLI); media uses a custom step (see below).
  *
  * Safety model:
- *   1. backup  — before touching anything, export the current environment
- *                (content + files) to a local .tar.gz. This is the rollback point.
+ *   1. backup  — OPTIONAL (the user picks "Backup & pull" or "Just pull").
+ *                Exports the current environment's CONTENT to a local .tar —
+ *                the rollback point. Media is deliberately not archived; see
+ *                createFullBackup for why that's both safe and much faster.
  *   2. content — restore directly from the remote into this Strapi
  *                (remote source → local Strapi destination, strategy 'restore').
- *                On Force stop, roll back from the phase-1 backup automatically.
- *                On any OTHER failure, the backup is kept and the admin page is
- *                left to ask the user whether to apply it — never restored silently.
  *   3. media   — best-effort; a broken/missing asset is logged and never rolls
  *                back the content that already committed.
+ *
+ * Nothing is ever restored silently. Stop offers two explicit choices —
+ * "Stop" (keep what landed, backup stays available) and "Stop & roll back"
+ * (restore now) — and a pull that fails on its own just reports it and leaves
+ * the backup for the admin page to offer.
  *
  * Why content is direct (not via an intermediate tar): routing it through a
  * local .tar.gz file broke on real data — the tar destination requires every
@@ -43,10 +47,9 @@
  * entity/asset counts (shown as done / total) and a percentage. The entities
  * total comes from the pre-pull backup just taken (a fresh, accurate proxy for
  * scale); the media total is the exact `plugin::upload.file` row count once
- * content has committed. "Force stop" aborts the running engine
- * (engine.abortTransfer()) and rolls back. The connection pool
- * (DATABASE_POOL_MAX) must have headroom or the admin can starve while the
- * restore holds connections.
+ * content has committed. Stop aborts the running engine
+ * (engine.abortTransfer()). The connection pool (DATABASE_POOL_MAX) must have
+ * headroom or the admin can starve while the restore holds connections.
  *
  * Saved targets ({ id, name, url, token }) live in the plugin store.
  */
@@ -206,6 +209,11 @@ module.exports = ({ strapi }) => {
   // them (→ ERR_STREAM_DESTROYED). Give assets much longer to arrive.
   const REMOTE_STREAM_TIMEOUT = 180000;
 
+  // Per-file cap for the media pull's own downloads. Generous enough for a
+  // large original over a slow link, short enough that one dead URL costs
+  // seconds rather than wedging the run.
+  const ASSET_FETCH_TIMEOUT = 60000;
+
   // Engine config. `only` selects which stage group(s) transfer:
   //   ['content']          → entities + links (+ schemas, always)
   //   ['files']            → media assets only
@@ -324,41 +332,26 @@ module.exports = ({ strapi }) => {
     await store().set({ key: BACKUPS_KEY, value: all.filter((b) => b.id !== id) });
   };
 
-  const ensureLocalAssetsExist = async () => {
-    try {
-      const staticPublic = strapi.dirs?.static?.public || path.join(process.cwd(), 'public');
-      const uploadsDir = path.join(staticPublic, 'uploads');
-      await fs.promises.mkdir(uploadsDir, { recursive: true });
-      const files = await strapi.db.query('plugin::upload.file').findMany({ select: ['hash', 'ext', 'formats'] });
-      for (const file of files || []) {
-        if (file.hash && file.ext) {
-          const mainPath = path.join(uploadsDir, `${file.hash}${file.ext}`);
-          if (!fs.existsSync(mainPath)) {
-            await fs.promises.writeFile(mainPath, Buffer.alloc(0)).catch(() => {});
-          }
-        }
-        if (file.formats && typeof file.formats === 'object') {
-          for (const fmt of Object.values(file.formats)) {
-            if (fmt && fmt.hash && fmt.ext) {
-              const fmtPath = path.join(uploadsDir, `${fmt.hash}${fmt.ext}`);
-              if (!fs.existsSync(fmtPath)) {
-                await fs.promises.writeFile(fmtPath, Buffer.alloc(0)).catch(() => {});
-              }
-            }
-          }
-        }
-      }
-    } catch (err) {
-      strapi.log.warn(`[content-tools] asset check: ${err?.message || err}`);
-    }
-  };
-
-  // Full native export of the current environment (content + files) to a
-  // compressed .tar.gz. Read-only against the DB — safe to run any time.
+  // Native export of the current environment's CONTENT to a local .tar.
+  // Read-only against the DB — safe to run any time.
+  //
+  // Deliberately content-only and uncompressed, because both of those were
+  // what made the backup (and therefore the rollback) slow:
+  //   - Media bytes dominate the archive size, and backing them up is
+  //     unnecessary here: a content-only pull never touches public/uploads
+  //     (the restore's deleteAllAssets/handleAssetsBackup both early-return
+  //     when `restore.assets` is false), and our media step only ever ADDS
+  //     files under the source's hashes — it never deletes the old ones. So
+  //     the previous media bytes are still on disk at rollback time, and the
+  //     restored rows point straight back at them.
+  //   - gzip of the JSONL is pure CPU for a file that never leaves this disk.
+  // This also removes the need for the old zero-byte-placeholder workaround
+  // (the tar destination demanded every asset's bytes match its stored size,
+  // so missing/broken media used to abort the export).
   const createFullBackup = async (reason = 'pre-pull') => {
     await fs.promises.mkdir(backupDir(), { recursive: true });
     const id = crypto.randomUUID();
-    // .tar.gz is appended by the file provider; give it the base path.
+    // The extension is appended by the file provider; give it the base path.
     const base = path.join(backupDir(), `${reason}-${new Date().toISOString().replace(/[:.]/g, '-')}-${id.slice(0, 8)}`);
 
     const source = dtStrapi.providers.createLocalStrapiSourceProvider({
@@ -368,20 +361,21 @@ module.exports = ({ strapi }) => {
     const destination = dtFile.providers.createLocalFileDestinationProvider({
       file: { path: base, maxSizeJsonl: 256 * 1024 * 1024 },
       encryption: { enabled: false },
-      compression: { enabled: true },
+      compression: { enabled: false },
     });
 
-    const engine = dtEngine.createTransferEngine(source, destination, engineOptions());
+    const engine = dtEngine.createTransferEngine(source, destination, engineOptions(['content']));
     currentEngine = engine;
     status.counts = emptyCounts();
     const refresh = wireProgress(engine);
 
-    await ensureLocalAssetsExist();
     await engine.transfer();
     refresh();
     currentEngine = null;
 
-    const file = `${base}.tar.gz`;
+    // Matches the provider's archivePath: `${path}.tar` (+ .gz only when
+    // compression is enabled, which it isn't).
+    const file = `${base}.tar`;
     let bytes = 0;
     try {
       bytes = (await fs.promises.stat(file)).size;
@@ -395,7 +389,7 @@ module.exports = ({ strapi }) => {
       reason,
       createdAt: new Date().toISOString(),
       entities: totals.entities,
-      assets: totals.assets,
+      assets: totals.assets, // 0 — media is intentionally not archived, see above
       bytes,
     };
     const all = await getBackupsRaw();
@@ -484,8 +478,16 @@ module.exports = ({ strapi }) => {
   // servable to the website.
   const pullOneFile = async (file, { target, imageManip, providerService, uploadConfig, tmpDir }) => {
     const sourceUrl = resolveSourceAssetUrl(target, file.url);
-    const res = await fetch(sourceUrl);
-    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${sourceUrl}`);
+    // Always bound the fetch. Without a timeout a single unresponsive asset
+    // stalls the whole media loop with no way out — and because the response
+    // body must be consumed or cancelled to free the connection, a leaked
+    // pending request eventually saturates the HTTP agent and wedges every
+    // later file too.
+    const res = await fetch(sourceUrl, { signal: AbortSignal.timeout(ASSET_FETCH_TIMEOUT) });
+    if (!res.ok) {
+      await res.body?.cancel?.().catch(() => {});
+      throw new Error(`HTTP ${res.status} fetching ${sourceUrl}`);
+    }
     const buffer = Buffer.from(await res.arrayBuffer());
 
     const fileData = {
@@ -566,17 +568,22 @@ module.exports = ({ strapi }) => {
 
   /* ------------------------------------------------------------- restore */
 
-  // Restore a .tar.gz into this environment (delete-then-import from a LOCAL
-  // file — fast and offline, short destructive window). `only` selects what to
-  // pull from the archive: ['content'] for a downloaded content snapshot, or
-  // ['content','files'] for a full backup rollback.
-  const restoreFromFile = async (file, only = ['content', 'files']) => {
+  // Restore a backup .tar into this environment (delete-then-import from a
+  // LOCAL file — fast and offline, short destructive window).
+  //
+  // Content-only, matching what createFullBackup writes. Keeping assets OUT of
+  // the restore is also what makes the rollback safe AND fast: with
+  // `restore.assets` false the destination skips deleteAllAssets and
+  // handleAssetsBackup entirely, so public/uploads is never moved aside or
+  // emptied — the pre-pull media bytes stay exactly where they are and the
+  // restored rows point back at them.
+  const restoreFromFile = async (file, only = ['content']) => {
     if (!fs.existsSync(file)) throw fail('BadRequest', 'Archive file is missing on disk', 400);
 
     const source = dtFile.providers.createLocalFileSourceProvider({
       file: { path: file },
       encryption: { enabled: false },
-      compression: { enabled: true },
+      compression: { enabled: false },
     });
     const destination = dtStrapi.providers.createLocalStrapiDestinationProvider({
       getStrapi: () => strapi,
@@ -684,11 +691,13 @@ module.exports = ({ strapi }) => {
 
   /* ---------------------------------------------------------------- pull */
 
-  // Roll back to the pre-pull backup and resolve the job as either "stopped"
-  // (user-initiated Force stop — always auto-rolls-back) or "failed" (the
-  // rollback itself blew up, which needs a manual fix). When the backup step
-  // was skipped for this run there is nothing to roll back to — say so.
-  const rollBackAndFinish = async (backup) => {
+  // Resolve a user-initiated stop. Two flavours, chosen when Stop is pressed:
+  //   - plain stop (rollbackOnStop false) → leave whatever already committed
+  //     in place and keep the backup, so it can still be applied manually.
+  //   - stop & roll back                  → restore the pre-pull backup now.
+  // With no backup for this run (the backup step was skipped) there is nothing
+  // to roll back to either way — say so rather than pretending.
+  const stopAndFinish = async (backup) => {
     if (!backup) {
       status = {
         ...status,
@@ -700,9 +709,20 @@ module.exports = ({ strapi }) => {
       };
       return;
     }
+    if (!status.rollbackOnStop) {
+      status = {
+        ...status,
+        running: false,
+        step: 'stopped',
+        phase: 'Stopped — partial data kept. Apply the backup below to undo it.',
+        percent: null,
+        finishedAt: Date.now(),
+      };
+      return;
+    }
     status = { ...status, step: 'restore', phase: 'Rolling back to pre-pull backup…', percent: null, counts: emptyCounts() };
     try {
-      await restoreFromFile(backup.file, ['content', 'files']);
+      await restoreFromFile(backup.file);
       await discardBackup(backup.id);
       status = { ...status, running: false, step: 'stopped', phase: 'Stopped — restored pre-pull backup', percent: 100, finishedAt: Date.now() };
       strapi.log.info('[content-tools] rolled back to pre-pull backup');
@@ -738,10 +758,22 @@ module.exports = ({ strapi }) => {
   //   On success (or a stopped-and-rolled-back run) the backup is discarded —
   //   only a genuinely failed, unresolved pull leaves one behind.
   const runJob = async (target, { includeMedia, includeBackup }) => {
-    // 1) Full safety backup of the current data (optional).
+    // How many entities this environment currently holds. Doubles as the
+    // progress denominator for BOTH the backup (which exports exactly these)
+    // and the pull that follows, so neither phase sits on "estimating…".
+    const localEntities = await countLocalEntities();
+
+    // 1) Content backup of the current data (optional).
     let backup = null;
     if (includeBackup) {
-      status = { ...status, step: 'backup', phase: 'Backing up current data…', counts: emptyCounts(), percent: null };
+      status = {
+        ...status,
+        step: 'backup',
+        phase: 'Backing up current content…',
+        counts: emptyCounts(),
+        percent: localEntities ? 0 : null,
+        estimate: { entities: localEntities, assets: 0 },
+      };
       try {
         backup = await createFullBackup('pre-pull');
         status = { ...status, backup };
@@ -769,10 +801,10 @@ module.exports = ({ strapi }) => {
       return;
     }
 
-    // Entities denominator for the "X / Y" progress display: the backup we
-    // just took (this environment's own current scale, fresh every run), or —
-    // when the backup was skipped — a direct local count instead.
-    const estEntities = backup ? backup.entities || 0 : await countLocalEntities();
+    // Denominator for the pull: what the backup actually exported if we took
+    // one (exact), else this environment's live count from above. Either is
+    // only a proxy for the source's size, but it's the right order of scale.
+    const estEntities = backup ? backup.entities || localEntities : localEntities;
 
     // 2) Pull CONTENT (entities + links) — this is the important part and it
     // commits on its own, independent of media.
@@ -781,7 +813,7 @@ module.exports = ({ strapi }) => {
       step: 'transfer',
       phase: 'Pulling content…',
       counts: emptyCounts(),
-      percent: null,
+      percent: estEntities ? 0 : null,
       estimate: { entities: estEntities, assets: 0 },
     };
     let content;
@@ -792,7 +824,7 @@ module.exports = ({ strapi }) => {
       const stopped = status.stopRequested;
       strapi.log.warn(`[content-tools] content pull ${stopped ? 'stopped by user' : 'failed'}: ${err?.message || err}`);
       if (stopped) {
-        await rollBackAndFinish(backup);
+        await stopAndFinish(backup);
       } else {
         // Genuine failure: do NOT auto-restore. Keep the backup (if any) and
         // let the admin page ask whether to apply it.
@@ -838,7 +870,7 @@ module.exports = ({ strapi }) => {
 
     // Force stop (after content committed) → honour the rollback promise.
     if (status.stopRequested) {
-      await rollBackAndFinish(backup);
+      await stopAndFinish(backup);
       return;
     }
 
@@ -888,6 +920,7 @@ module.exports = ({ strapi }) => {
       backup: null,
       error: null,
       stopRequested: false,
+      rollbackOnStop: false, // set by stop({ rollback: true })
       startedAt: Date.now(),
       finishedAt: null,
     };
@@ -909,18 +942,53 @@ module.exports = ({ strapi }) => {
     return status;
   };
 
-  // Force stop: flag it, then abort the live engine. The runJob catch handler
-  // detects stopRequested and restores the pre-pull backup.
-  const stop = async () => {
+  // How long to wait for an aborted engine to actually settle before we stop
+  // believing it will. abortTransfer() only flips a flag and aborts the stream
+  // controller — if a stage is blocked on a socket that never returns, the
+  // pipeline promise stays pending forever and `await engine.transfer()` never
+  // resolves, which used to leave the page stuck on "Stopping…" indefinitely.
+  const ABORT_SETTLE_GRACE = 20000;
+
+  // Stop: flag it, then abort the live engine. runJob notices stopRequested and
+  // hands off to stopAndFinish, which either keeps the partial data (default)
+  // or restores the pre-pull backup when `rollback` was asked for.
+  const stop = async ({ rollback } = {}) => {
     if (!status.running) throw fail('BadRequest', 'No transfer is running', 400);
-    status = { ...status, stopRequested: true, phase: 'Stopping…' };
+    status = {
+      ...status,
+      stopRequested: true,
+      rollbackOnStop: !!rollback,
+      phase: rollback ? 'Stopping and rolling back…' : 'Stopping…',
+    };
     try {
       if (currentEngine && typeof currentEngine.abortTransfer === 'function') {
+        // Note: abortTransfer() always throws ('Transfer aborted.') by design.
         await currentEngine.abortTransfer();
       }
     } catch (err) {
       strapi.log.warn(`[content-tools] abortTransfer: ${err?.message || err}`);
     }
+
+    // Safety net: if the job hasn't resolved itself by now, stop reporting it
+    // as running so the admin page isn't wedged. The orphaned stage may still
+    // be winding down in the background — say so instead of pretending it's
+    // clean, and don't touch the backup (it stays listed and applyable).
+    const startedAt = status.startedAt;
+    setTimeout(() => {
+      if (status.running && status.stopRequested && status.startedAt === startedAt) {
+        strapi.log.warn('[content-tools] stop: engine did not settle in time, releasing the job');
+        status = {
+          ...status,
+          running: false,
+          step: 'stopped',
+          phase:
+            'Stopped — the transfer did not shut down cleanly. Check the data, and apply the backup below if you need to undo.',
+          finishedAt: Date.now(),
+        };
+        currentEngine = null;
+      }
+    }, ABORT_SETTLE_GRACE).unref?.();
+
     return status;
   };
 

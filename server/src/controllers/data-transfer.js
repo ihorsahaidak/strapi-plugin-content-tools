@@ -46,10 +46,10 @@ module.exports = ({ strapi }) => ({
     }
   },
 
-  // POST /content-tools/data-transfer/stop
+  // POST /content-tools/data-transfer/stop  { rollback }
   async stop(ctx) {
     try {
-      ctx.body = await service(strapi).stop();
+      ctx.body = await service(strapi).stop({ rollback: !!(ctx.request.body || {}).rollback });
     } catch (err) {
       sendError(strapi, ctx, err);
     }
