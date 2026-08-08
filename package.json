@@ -1,15 +1,15 @@
 {
   "name": "strapi-plugin-content-tools",
   "version": "1.0.15",
-  "description": "Content Manager productivity tools for Strapi 5: sticky per-content-type filters, move entries between languages, and export/import entries with their media.",
+  "description": "Content Manager productivity tools for Strapi 5: sticky per-content-type filters, move entries between languages, and pull content + media from another Strapi environment.",
   "keywords": [
     "strapi",
     "plugin",
     "strapi-plugin",
     "content-manager",
     "i18n",
-    "import-export",
     "filters",
+    "data-transfer",
     "media"
   ],
   "license": "MIT",
@@ -42,9 +42,6 @@
     "watch:link": "strapi-plugin watch:link",
     "verify": "strapi-plugin verify"
   },
-  "dependencies": {
-    "jszip": "^3.10.1"
-  },
   "devDependencies": {
     "@strapi/data-transfer": "^5.0.0",
     "@strapi/design-system": "^2.0.0",
@@ -75,7 +72,7 @@
     "kind": "plugin",
     "name": "content-tools",
     "displayName": "Content Tools",
-    "description": "Sticky per-content-type list filters, move entries between languages, and export/import entries with media."
+    "description": "Sticky per-content-type list filters, move entries between languages, and pull content + media from another Strapi environment."
   },
   "engines": {
     "node": ">=18.0.0 <=22.x.x",

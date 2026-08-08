@@ -17,7 +17,7 @@ type ContentTypeMeta = {
   attributes: Record<string, AttrMeta>;
 };
 
-const EMPTY: ContentToolsEntry = { fields: [], export: false, import: false };
+const EMPTY: ContentToolsEntry = { fields: [] };
 
 const shortTarget = (uid?: string) => (uid ? uid.split('.').pop() : '');
 
@@ -70,7 +70,7 @@ const SettingsPage = () => {
       const current = prev[uid] ?? EMPTY;
       const next: ContentToolsEntry = { ...current, ...patch };
       const updated = { ...prev };
-      if (next.fields.length || next.export || next.import) updated[uid] = next;
+      if (next.fields.length) updated[uid] = next;
       else delete updated[uid];
       return updated;
     });
@@ -104,8 +104,8 @@ const SettingsPage = () => {
     <Layouts.Root>
       <Page.Main>
         <Layouts.Header
-          title="Filters"
-          subtitle="Choose which fields become sticky list filters in the Content Manager, per content type."
+          title="Always-on filters"
+          subtitle="Fields chosen here appear as filters above every Content Manager list for that content type, and stay applied as you navigate."
           primaryAction={
             <Button onClick={save} loading={saving} startIcon={<Check />}>
               Save

@@ -3,8 +3,10 @@
 /**
  * Per-content-type Content Tools configuration.
  *
- * Stored shape (v2): { "<uid>": { fields: string[], export: boolean, import: boolean } }
- * Legacy shape (v1): { "<uid>": string[] }  -> normalized to v2 on read.
+ * Stored shape: { "<uid>": { fields: string[] } }
+ * Legacy shapes normalized on read: a bare string[] (v1), and the v2 object
+ * that also carried `export`/`import` flags for the removed import/export
+ * feature — those keys are simply dropped.
  *
  * Persisted in the plugin store so the config is shared across all admins.
  */
@@ -28,17 +30,11 @@ module.exports = ({ strapi }) => {
   };
 
   const normalizeEntry = (raw) => {
-    if (Array.isArray(raw)) {
-      return { fields: [...new Set(raw)], export: false, import: false };
-    }
+    if (Array.isArray(raw)) return { fields: [...new Set(raw)] };
     if (raw && typeof raw === 'object') {
-      return {
-        fields: Array.isArray(raw.fields) ? [...new Set(raw.fields)] : [],
-        export: !!raw.export,
-        import: !!raw.import,
-      };
+      return { fields: Array.isArray(raw.fields) ? [...new Set(raw.fields)] : [] };
     }
-    return { fields: [], export: false, import: false };
+    return { fields: [] };
   };
 
   const getConfig = async () => {

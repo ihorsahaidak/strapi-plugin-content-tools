@@ -1,7 +1,5 @@
 export type ContentToolsEntry = {
   fields: string[];
-  export: boolean;
-  import: boolean;
 };
 export type ContentToolsConfig = Record<string, ContentToolsEntry>;
 

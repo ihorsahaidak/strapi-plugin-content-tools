@@ -67,6 +67,12 @@ const {
 
 const TARGETS_KEY = 'dataTransferTargets';
 const BACKUPS_KEY = 'dataTransferBackups'; // [{ id, file, createdAt, entities, assets, bytes, reason }]
+// What the LAST successful pull of each target actually transferred:
+// { [targetId]: { entities, media } }. This is the only honest denominator for
+// the progress bar — how much the SOURCE sends is a property of the source, so
+// the local row count predicts it badly (a 2,372-entity local pulling a
+// 3,601-entity preprod showed "3,601 / 2,372"). Unknown target → no bar.
+const ESTIMATES_KEY = 'dataTransferEstimates';
 const MAX_BACKUPS = 1; // keep only the most recent pre-pull backup
 
 // Models the transfer must never touch. This list is passed as the restore's
@@ -171,6 +177,12 @@ module.exports = ({ strapi }) => {
 
   const getStatus = () => status;
 
+  const getEstimates = async () => (await store().get({ key: ESTIMATES_KEY })) || {};
+  const saveEstimate = async (targetId, value) => {
+    const all = await getEstimates();
+    await store().set({ key: ESTIMATES_KEY, value: { ...all, [targetId]: value } });
+  };
+
   const buildRemoteUrl = (raw) => {
     const base = new URL(raw);
     if (!/\/admin\/?$/.test(base.pathname)) {
@@ -253,28 +265,50 @@ module.exports = ({ strapi }) => {
       } catch {
         /* ignore */
       }
-      // Percent from the estimate denominator (entities + assets).
+      // Percent from the estimate denominator (entities + assets). The
+      // denominator is a prediction, not a fact — the source decides how much
+      // it sends. Once we're past it the ratio is meaningless, so drop to
+      // indeterminate rather than showing a stuck 99% or an absurd "3601/2372".
       const est = status.estimate;
-      if (est && est.entities + est.assets > 0) {
-        const done = status.counts.entities.count + status.counts.assets.count;
-        const total = est.entities + est.assets;
-        status.percent = Math.max(0, Math.min(99, Math.round((done / total) * 100)));
-      }
+      const done = status.counts.entities.count + status.counts.assets.count;
+      const total = est ? est.entities + est.assets : 0;
+      status.percent = total > 0 && done <= total
+        ? Math.max(0, Math.min(99, Math.round((done / total) * 100)))
+        : null;
       if (typeof onTick === 'function') onTick();
     };
-    const verb =
-      status.step === 'restore'
-        ? 'Restoring'
-        : status.step === 'download'
-          ? 'Downloading'
-          : status.step === 'backup'
-            ? 'Backing up'
-            : 'Transferring';
+    // Human labels for the engine's raw stage names — "Transferring links…"
+    // means nothing to someone watching a pull.
+    const stageLabels = {
+      backup: {
+        schemas: 'Reading content types…',
+        entities: 'Saving records to the backup…',
+        links: 'Saving relations to the backup…',
+        configuration: 'Saving settings to the backup…',
+      },
+      transfer: {
+        schemas: 'Comparing content types…',
+        entities: 'Copying records…',
+        links: 'Rebuilding relations between records…',
+        configuration: 'Copying settings…',
+      },
+      restore: {
+        schemas: 'Reading the backup…',
+        entities: 'Restoring records…',
+        links: 'Restoring relations between records…',
+        configuration: 'Restoring settings…',
+      },
+    };
+    const step = status.step;
     try {
       const s = engine.progress?.stream;
       if (s && typeof s.on === 'function') {
         s.on('stage::start', ({ stage } = {}) => {
-          if (stage) status.phase = `${verb} ${stage}…`;
+          if (stage) {
+            status.phase =
+              stageLabels[step]?.[stage] ??
+              `${step === 'backup' ? 'Backing up' : step === 'restore' ? 'Restoring' : 'Transferring'} ${stage}…`;
+          }
           refresh();
         });
         s.on('stage::progress', refresh);
@@ -758,10 +792,14 @@ module.exports = ({ strapi }) => {
   //   On success (or a stopped-and-rolled-back run) the backup is discarded —
   //   only a genuinely failed, unresolved pull leaves one behind.
   const runJob = async (target, { includeMedia, includeBackup }) => {
-    // How many entities this environment currently holds. Doubles as the
-    // progress denominator for BOTH the backup (which exports exactly these)
-    // and the pull that follows, so neither phase sits on "estimating…".
+    // Two different denominators, because the two phases measure two
+    // different things:
+    //   - the backup exports THIS environment, so the local count is exact;
+    //   - the pull receives whatever the SOURCE has, which the local count
+    //     cannot predict — only a previous pull of this same target can.
+    // No previous pull → no bar for that phase, rather than a wrong one.
     const localEntities = await countLocalEntities();
+    const previous = (await getEstimates())[target.id] || null;
 
     // 1) Content backup of the current data (optional).
     let backup = null;
@@ -801,20 +839,17 @@ module.exports = ({ strapi }) => {
       return;
     }
 
-    // Denominator for the pull: what the backup actually exported if we took
-    // one (exact), else this environment's live count from above. Either is
-    // only a proxy for the source's size, but it's the right order of scale.
-    const estEntities = backup ? backup.entities || localEntities : localEntities;
-
     // 2) Pull CONTENT (entities + links) — this is the important part and it
-    // commits on its own, independent of media.
+    // commits on its own, independent of media. Denominator: what this target
+    // sent last time, or none at all on a first pull.
+    const estEntities = previous?.entities || 0;
     status = {
       ...status,
       step: 'transfer',
-      phase: 'Pulling content…',
+      phase: 'Copying content…',
       counts: emptyCounts(),
       percent: estEntities ? 0 : null,
-      estimate: { entities: estEntities, assets: 0 },
+      estimate: estEntities ? { entities: estEntities, assets: 0 } : null,
     };
     let content;
     try {
@@ -874,7 +909,14 @@ module.exports = ({ strapi }) => {
       return;
     }
 
-    // Success: the backup (if one was taken) has served its purpose, drop it.
+    // Success: remember what this target actually sent, so the next pull of it
+    // gets a real progress bar instead of an indeterminate one.
+    await saveEstimate(target.id, {
+      entities: content.entities,
+      media: includeMedia ? media.total : previous?.media || 0,
+    });
+
+    // The backup (if one was taken) has served its purpose, drop it.
     if (backup) await discardBackup(backup.id);
     status = {
       ...status,

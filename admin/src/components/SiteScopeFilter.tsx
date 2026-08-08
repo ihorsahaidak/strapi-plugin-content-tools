@@ -28,6 +28,13 @@ import {
 
 type Option = { value: string; label: string };
 
+/**
+ * Loaded options for one relation target. `complete` means the response wasn't
+ * truncated by the page size, so "not in this list" reliably means "gone" —
+ * without it we must not treat an unknown id as stale.
+ */
+type OptionSet = { options: Option[]; complete: boolean };
+
 const relationOptions = (results: any[]): Option[] =>
   (results ?? [])
     .map((r) => ({
@@ -35,6 +42,8 @@ const relationOptions = (results: any[]): Option[] =>
       label: r.name ?? r.title ?? r.slug ?? `#${r.id}`,
     }))
     .filter((o) => o.label);
+
+const RELATION_PAGE_SIZE = 100;
 
 /**
  * Config-driven sticky filter bar injected into the Content Manager list view.
@@ -52,7 +61,7 @@ const SiteScopeFilter = () => {
   const attributes: Record<string, any> = ctx?.contentType?.attributes ?? {};
 
   const [fields, setFields] = React.useState<string[] | null>(null);
-  const [relOptions, setRelOptions] = React.useState<Record<string, Option[]>>({});
+  const [relOptions, setRelOptions] = React.useState<Record<string, OptionSet>>({});
 
   // Load the configured filter fields for this content type.
   React.useEffect(() => {
@@ -102,10 +111,19 @@ const SiteScopeFilter = () => {
     let cancelled = false;
     targets.forEach((target) => {
       if (relOptions[target]) return;
-      get(`/content-manager/collection-types/${target}?pageSize=100&sort=name:ASC`)
+      get(`/content-manager/collection-types/${target}?pageSize=${RELATION_PAGE_SIZE}&sort=name:ASC`)
         .then((res) => {
           if (cancelled) return;
-          setRelOptions((prev) => ({ ...prev, [target]: relationOptions((res.data as any)?.results) }));
+          const data = res.data as any;
+          const options = relationOptions(data?.results);
+          const total = data?.pagination?.total;
+          setRelOptions((prev) => ({
+            ...prev,
+            [target]: {
+              options,
+              complete: typeof total === 'number' ? total <= options.length : options.length < RELATION_PAGE_SIZE,
+            },
+          }));
         })
         .catch(() => {});
     });
@@ -137,28 +155,80 @@ const SiteScopeFilter = () => {
     [values, applyValues, model]
   );
 
-  // Seed from the cookie once per (model, config) when the URL has no value.
+  const relationDescriptors = React.useMemo(
+    () => descriptors.filter((d) => d.kind === 'relation'),
+    [descriptors]
+  );
+
+  // Don't act on relation values before we know what ids actually exist.
+  const relationsReady = React.useMemo(
+    () => relationDescriptors.every((d) => relOptions[d.target!] !== undefined),
+    [relationDescriptors, relOptions]
+  );
+
+  /**
+   * A stored id is only meaningful while the record still exists. Ids are NOT
+   * stable across a Data Transfer pull — the restore deletes every row and
+   * re-inserts it, so Postgres hands out fresh ids each time. A cookie (or a
+   * refreshed/bookmarked URL) holding a pre-pull id would otherwise re-apply a
+   * filter that matches nothing: the list renders empty while this bar shows a
+   * blank select, because the value resolves to no option.
+   *
+   * Only judge an id stale when the option list is COMPLETE, otherwise a target
+   * with more records than one page would have valid ids pruned.
+   */
+  const isStaleRelationValue = React.useCallback(
+    (d: Descriptor, value: string) => {
+      if (!value) return false;
+      const set = relOptions[d.target!];
+      if (!set || !set.complete) return false;
+      return !set.options.some((o) => o.value === value);
+    },
+    [relOptions]
+  );
+
+  // Seed from the cookie once per (model, config) when the URL has no value,
+  // and drop any stale value already sitting in the URL or the cookie.
   const seededRef = React.useRef('');
   React.useEffect(() => {
-    if (!model || descriptors.length === 0) return;
+    if (!model || descriptors.length === 0 || !relationsReady) return;
     const sig = `${model}:${descriptors.map((d) => d.field).join(',')}`;
     if (seededRef.current === sig) return;
     seededRef.current = sig;
 
-    const cookie = readCookie();
+    let cookie = readCookie();
+    let cookieChanged = false;
     const seeded = { ...values };
     let changed = false;
+
     for (const d of descriptors) {
-      if (seeded[d.field]) continue;
-      const seed = cookieSeed(cookie, model, d);
-      if (seed) {
-        seeded[d.field] = seed;
-        changed = true;
+      // Already in the URL (refresh, bookmark, shared link) — keep it unless
+      // it points at something that no longer exists.
+      if (seeded[d.field]) {
+        if (isStaleRelationValue(d, seeded[d.field])) {
+          delete seeded[d.field];
+          changed = true;
+          cookie = cookieStore(cookie, model, d, '');
+          cookieChanged = true;
+        }
+        continue;
       }
+      const seed = cookieSeed(cookie, model, d);
+      if (!seed) continue;
+      if (isStaleRelationValue(d, seed)) {
+        // Forget it rather than re-applying a filter that can't match.
+        cookie = cookieStore(cookie, model, d, '');
+        cookieChanged = true;
+        continue;
+      }
+      seeded[d.field] = seed;
+      changed = true;
     }
+
+    if (cookieChanged) writeCookie(cookie);
     if (changed) applyValues(seeded);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, descriptors]);
+  }, [model, descriptors, relationsReady]);
 
   if (collectionType !== 'collection-types' || descriptors.length === 0) return null;
 
@@ -178,7 +248,7 @@ const SiteScopeFilter = () => {
               onChange={(v?: string) => onChange(d, v ?? '')}
               onClear={() => onChange(d, '')}
             >
-              {(relOptions[d.target!] ?? []).map((o) => (
+              {(relOptions[d.target!]?.options ?? []).map((o) => (
                 <ComboboxOption key={o.value} value={o.value}>
                   {o.label}
                 </ComboboxOption>

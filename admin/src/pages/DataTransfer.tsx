@@ -139,6 +139,9 @@ const DataTransferPage = () => {
   const [confirmRestore, setConfirmRestore] = React.useState<Backup | null>(null);
   const [testingId, setTestingId] = React.useState<string | null>(null);
   const [now, setNow] = React.useState(Date.now());
+  // True when the last status poll failed — the admin API is unreachable,
+  // which mostly happens while a transfer is holding DB connections.
+  const [offline, setOffline] = React.useState(false);
 
   const loadTargets = React.useCallback(async () => {
     const res = await get('/content-tools/data-transfer/targets');
@@ -149,8 +152,13 @@ const DataTransferPage = () => {
     try {
       const res = await get('/content-tools/data-transfer/status');
       setStatus((res.data as any) ?? { running: false });
+      setOffline(false);
     } catch {
-      /* ignore */
+      // A transfer holds DB connections, and admin auth needs one — so these
+      // polls genuinely do fail mid-pull when the pool is tight. Surface it
+      // instead of silently freezing on the last good frame, which read as
+      // "the pull is stuck" when it had actually finished.
+      setOffline(true);
     }
   }, [get]);
 
@@ -169,10 +177,12 @@ const DataTransferPage = () => {
 
   const busy = status.running;
 
-  // Poll while a transfer is running (fast), and tick the elapsed clock.
+  // Always poll — fast while a transfer runs, slowly when idle. The slow poll
+  // is what makes a run that finished while the admin was unreachable show up
+  // on its own; previously polling stopped with the last frame we managed to
+  // fetch, so a finished pull kept rendering as "running" until a full reload.
   React.useEffect(() => {
-    if (!busy) return;
-    const poll = setInterval(loadStatus, 1500);
+    const poll = setInterval(loadStatus, busy ? 1500 : 8000);
     const tick = setInterval(() => setNow(Date.now()), 1000);
     return () => {
       clearInterval(poll);
@@ -180,12 +190,22 @@ const DataTransferPage = () => {
     };
   }, [busy, loadStatus]);
 
-  // When a run just finished, refresh the backups list once.
+  // Announce the transition out of "running" once, and refresh the backups
+  // list (a failed run leaves one behind; a successful one clears it).
   const prevBusy = React.useRef(busy);
   React.useEffect(() => {
-    if (prevBusy.current && !busy) loadBackups();
+    if (prevBusy.current && !busy) {
+      loadBackups();
+      const step = status.step;
+      toggleNotification({
+        type: step === 'done' ? 'success' : step === 'stopped' ? 'warning' : 'danger',
+        message:
+          status.phase ||
+          (step === 'done' ? 'Transfer finished.' : step === 'stopped' ? 'Transfer stopped.' : 'Transfer failed.'),
+      });
+    }
     prevBusy.current = busy;
-  }, [busy, loadBackups]);
+  }, [busy, loadBackups, status.step, status.phase, toggleNotification]);
 
   const patch = (id: string, key: keyof Target, value: string) =>
     setTargets((prev) => prev.map((t) => (t.id === id ? { ...t, [key]: value } : t)));
@@ -195,11 +215,23 @@ const DataTransferPage = () => {
 
   const removeTarget = (id: string) => setTargets((prev) => prev.filter((t) => t.id !== id));
 
+  /**
+   * Persist the targets. Returns whether it worked so callers that need the
+   * server to already know about an edit (Test, Pull) can bail out cleanly.
+   * The server only ever sees saved targets — it reads the token from its own
+   * store, not from the request — so anything typed but unsaved is invisible
+   * to it, which is why both actions save first.
+   */
+  const persistTargets = React.useCallback(async (): Promise<boolean> => {
+    const res = await put('/content-tools/data-transfer/targets', { targets });
+    setTargets(((res.data as any) ?? []).map((t: any) => ({ ...t, token: '' })));
+    return true;
+  }, [put, targets]);
+
   const save = async () => {
     setSaving(true);
     try {
-      const res = await put('/content-tools/data-transfer/targets', { targets });
-      setTargets(((res.data as any) ?? []).map((t: any) => ({ ...t, token: '' })));
+      await persistTargets();
       toggleNotification({ type: 'success', message: 'Targets saved.' });
     } catch {
       toggleNotification({ type: 'danger', message: 'Could not save targets.' });
@@ -211,6 +243,9 @@ const DataTransferPage = () => {
   const testConnection = async (target: Target) => {
     setTestingId(target.id);
     try {
+      // Save first: a token you just pasted isn't on the server yet, and the
+      // probe would test the previously-stored one (or fail with "no token").
+      await persistTargets();
       const res = await post('/content-tools/data-transfer/probe', { targetId: target.id });
       const r = (res.data as any) || {};
       if (r.ok) {
@@ -240,7 +275,7 @@ const DataTransferPage = () => {
   const runPull = async (target: Target, { skipBackup }: { skipBackup: boolean }) => {
     setConfirmTarget(null);
     try {
-      await put('/content-tools/data-transfer/targets', { targets });
+      await persistTargets();
       const res = await post('/content-tools/data-transfer/pull', {
         targetId: target.id,
         skipMedia,
@@ -311,6 +346,52 @@ const DataTransferPage = () => {
           ? 'warning'
           : 'secondary';
 
+  // The phases this particular run goes through, in order, each marked done /
+  // active / pending. `includeBackup`/`includeMedia` come from the run itself,
+  // so a skipped phase is simply not listed rather than shown stuck at pending.
+  type StepState = 'done' | 'active' | 'pending';
+  const order = ['backup', 'transfer', 'assets'] as const;
+  const currentIndex = order.indexOf(status.step as any);
+  const finished = status.step === 'done';
+  const stepState = (key: (typeof order)[number]): StepState => {
+    if (finished) return 'done';
+    const i = order.indexOf(key);
+    if (currentIndex < 0) return 'pending'; // idle / restore / failed / stopped
+    return i < currentIndex ? 'done' : i === currentIndex ? 'active' : 'pending';
+  };
+
+  const steps: Array<{ key: string; label: string; detail?: string; state: StepState }> =
+    showPanel && status.step !== 'restore' && status.step !== 'idle'
+      ? [
+          ...(status.includeBackup === false
+            ? []
+            : [
+                {
+                  key: 'backup',
+                  label: 'Back up',
+                  state: stepState('backup'),
+                  detail: status.backup ? fmtBytes(status.backup.bytes) : undefined,
+                },
+              ]),
+          {
+            key: 'transfer',
+            label: 'Content',
+            state: stepState('transfer'),
+            detail: totalEntities ? `${fmtInt(totalEntities)} records` : undefined,
+          },
+          ...(status.includeMedia === false
+            ? []
+            : [
+                {
+                  key: 'assets',
+                  label: 'Media',
+                  state: stepState('assets'),
+                  detail: totalAssets ? `${fmtInt(totalAssets)} files` : undefined,
+                },
+              ]),
+        ]
+      : [];
+
   return (
     <Layouts.Root>
       <Page.Main>
@@ -325,6 +406,50 @@ const DataTransferPage = () => {
         />
         <Layouts.Content>
           <Flex direction="column" alignItems="stretch" gap={4}>
+            {/* what the fields mean + safety note, combined */}
+            <Box padding={4} hasRadius background="neutral0" borderColor="neutral150" shadow="tableShadow">
+              <Typography variant="delta" tag="h2">
+                How it works
+              </Typography>
+              <Box paddingTop={2}>
+                <Typography tag="p" textColor="neutral700">
+                  <b>Strapi URL</b> — the base address of the environment you want to copy data{' '}
+                  <i>from</i> (e.g. <code>https://your-strapi.example.com</code>). Don&apos;t add{' '}
+                  <code>/admin</code>; it&apos;s appended automatically. The source must run the same
+                  Strapi version as this one — use <b>Test</b> to check.
+                </Typography>
+              </Box>
+              <Box paddingTop={3} paddingBottom={3}>
+                <Typography tag="p" textColor="neutral700">
+                  <b>Transfer token</b> — created in the <i>source</i> environment&apos;s admin under{' '}
+                  <b>Settings → Transfer Tokens</b> (choose <b>Pull</b> or <b>Full access</b>). An API
+                  token will <b>not</b> work. It&apos;s stored masked and only used for the pull.
+                </Typography>
+              </Box>
+              <Box paddingTop={3} borderStyle="solid" borderWidth="1px 0 0 0" borderColor="neutral150">
+                <Box>
+                  <Typography tag="p" textColor="warning700">
+                    Pulling replaces this environment&apos;s <b>content and media</b> with the
+                    source&apos;s, and every image is re-downloaded and resized locally so it renders
+                    correctly here and on the website. Your{' '}
+                    <b>admin users, tokens and configuration are kept</b>. You choose per pull whether to{' '}
+                    <b>back up first</b> (a content snapshot you can restore) or <b>just pull</b> (faster,
+                    but nothing can undo it). While a pull runs, <b>Stop</b> aborts and keeps what landed,
+                    and <b>Stop &amp; roll back</b> restores the backup — nothing is ever restored
+                    silently, and a successful pull discards its backup.
+                  </Typography>
+                  <Box paddingTop={2}>
+                    <Typography tag="p" textColor="warning700">
+                      Note: every pull re-creates all records, so <b>numeric ids change</b> (document ids
+                      do not). If a content-manager list looks <b>empty after a pull</b>, it is almost
+                      always a saved filter or bookmarked admin URL still pointing at an id that no longer
+                      exists — clear the filters on that list.
+                    </Typography>
+                  </Box>
+                </Box>
+              </Box>
+            </Box>
+
             {/* live progress / last-run status */}
             {showPanel ? (
               <Box
@@ -354,6 +479,12 @@ const DataTransferPage = () => {
                         <Typography variant="pi" textColor={status.error ? 'danger600' : 'neutral600'}>
                           {status.error ?? status.phase ?? ''}
                         </Typography>
+                        {offline ? (
+                          <Typography variant="pi" textColor="warning600">
+                            Lost contact with the server — it can stop responding while a transfer holds
+                            database connections. Still retrying; this page will catch up on its own.
+                          </Typography>
+                        ) : null}
                       </Flex>
                     </Flex>
                     {busy ? (
@@ -392,7 +523,11 @@ const DataTransferPage = () => {
                     <Box>
                       <Flex justifyContent="space-between" paddingBottom={1}>
                         <Typography variant="pi" textColor="neutral600">
-                          {status.percent != null ? `${status.percent}%` : 'estimating…'}
+                          {status.percent != null
+                            ? `${status.percent}%`
+                            : busy
+                              ? 'working — total unknown'
+                              : ''}
                         </Typography>
                         <Typography variant="pi" textColor="neutral600">
                           {elapsed} elapsed
@@ -402,25 +537,77 @@ const DataTransferPage = () => {
                     </Box>
                   ) : null}
 
-                  {/* live counters — show "done / total" when an estimate exists */}
+                  {/* Step tracker. A single bar can't describe a run made of
+                      phases with different (and sometimes unknowable) sizes,
+                      so show the phases themselves — you can always tell where
+                      it is even when no percentage is meaningful. */}
+                  {steps.length ? (
+                    <Flex gap={2} wrap="wrap">
+                      {steps.map((s) => (
+                        <Flex
+                          key={s.key}
+                          gap={2}
+                          alignItems="center"
+                          padding={2}
+                          hasRadius
+                          background={
+                            s.state === 'active'
+                              ? 'primary100'
+                              : s.state === 'done'
+                                ? 'success100'
+                                : 'neutral100'
+                          }
+                        >
+                          <Typography variant="pi" fontWeight="bold" textColor={
+                            s.state === 'active'
+                              ? 'primary600'
+                              : s.state === 'done'
+                                ? 'success600'
+                                : 'neutral500'
+                          }>
+                            {s.state === 'done' ? '✓' : s.state === 'active' ? '●' : '○'} {s.label}
+                          </Typography>
+                          {s.detail ? (
+                            <Typography variant="pi" textColor="neutral600">
+                              {s.detail}
+                            </Typography>
+                          ) : null}
+                        </Flex>
+                      ))}
+                    </Flex>
+                  ) : null}
+
+                  {/* Live counters, scoped to the phase that's actually running.
+                      A media phase reports no entities and no byte total, so
+                      showing "Entities 0 / Data 0 B" alongside it just reads as
+                      data loss. The "/ total" is only kept while it still means
+                      something: it's a prediction from the last pull of this
+                      target, so once we pass it we show the count alone rather
+                      than a nonsense ratio like "3,601 / 2,372". */}
                   <Flex gap={6} wrap="wrap">
-                    <Stat
-                      label="Entities"
-                      value={
-                        status.estimate?.entities
-                          ? `${fmtInt(totalEntities)} / ${fmtInt(status.estimate.entities)}`
-                          : fmtInt(totalEntities)
-                      }
-                    />
-                    <Stat
-                      label="Media"
-                      value={
-                        status.estimate?.assets
-                          ? `${fmtInt(totalAssets)} / ${fmtInt(status.estimate.assets)}`
-                          : fmtInt(totalAssets)
-                      }
-                    />
-                    <Stat label="Data" value={fmtBytes(totalBytes)} />
+                    {status.step !== 'assets' ? (
+                      <Stat
+                        label="Entities"
+                        value={
+                          status.estimate?.entities && totalEntities <= status.estimate.entities
+                            ? `${fmtInt(totalEntities)} / ~${fmtInt(status.estimate.entities)}`
+                            : fmtInt(totalEntities)
+                        }
+                      />
+                    ) : null}
+                    {status.includeMedia !== false && (status.step === 'assets' || totalAssets > 0) ? (
+                      <Stat
+                        label="Media"
+                        value={
+                          status.estimate?.assets && totalAssets <= status.estimate.assets
+                            ? `${fmtInt(totalAssets)} / ${fmtInt(status.estimate.assets)}`
+                            : fmtInt(totalAssets)
+                        }
+                      />
+                    ) : null}
+                    {totalBytes > 0 ? <Stat label="Data" value={fmtBytes(totalBytes)} /> : null}
+                    {/* Only mentioned when there IS one — "Backup: skipped" is
+                        noise, the user chose that a moment ago. */}
                     {status.backup ? (
                       <Stat
                         label={
@@ -432,49 +619,11 @@ const DataTransferPage = () => {
                           status.backup.bytes
                         )}`}
                       />
-                    ) : status.includeBackup === false ? (
-                      <Stat label="Backup" value="Skipped — cannot undo" />
                     ) : null}
                   </Flex>
                 </Flex>
               </Box>
             ) : null}
-
-            {/* what the fields mean + safety note, combined */}
-            <Box padding={4} hasRadius background="neutral0" borderColor="neutral150" shadow="tableShadow">
-              <Typography variant="delta" tag="h2">
-                How it works
-              </Typography>
-              <Box paddingTop={2}>
-                <Typography tag="p" textColor="neutral700">
-                  <b>Strapi URL</b> — the base address of the environment you want to copy data{' '}
-                  <i>from</i> (e.g. <code>https://your-strapi.example.com</code>). Don&apos;t add{' '}
-                  <code>/admin</code>; it&apos;s appended automatically. The source must run the same
-                  Strapi version as this one — use <b>Test</b> to check.
-                </Typography>
-              </Box>
-              <Box paddingTop={3} paddingBottom={3}>
-                <Typography tag="p" textColor="neutral700">
-                  <b>Transfer token</b> — created in the <i>source</i> environment&apos;s admin under{' '}
-                  <b>Settings → Transfer Tokens</b> (choose <b>Pull</b> or <b>Full access</b>). An API
-                  token will <b>not</b> work. It&apos;s stored masked and only used for the pull.
-                </Typography>
-              </Box>
-              <Box paddingTop={3} borderStyle="solid" borderWidth="1px 0 0 0" borderColor="neutral150">
-                <Box>
-                  <Typography tag="p" textColor="warning700">
-                    Pulling replaces this environment&apos;s <b>content and media</b> with the
-                    source&apos;s, and every image is re-downloaded and resized locally so it renders
-                    correctly here and on the website. Your{' '}
-                    <b>admin users, tokens and configuration are kept</b>. You choose per pull whether to{' '}
-                    <b>back up first</b> (a content snapshot you can restore) or <b>just pull</b> (faster,
-                    but nothing can undo it). While a pull runs, <b>Stop</b> aborts and keeps what landed,
-                    and <b>Stop &amp; roll back</b> restores the backup — nothing is ever restored
-                    silently, and a successful pull discards its backup.
-                  </Typography>
-                </Box>
-              </Box>
-            </Box>
 
             {/* targets */}
             {targets.map((t) => (
