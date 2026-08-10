@@ -22,6 +22,7 @@ Published as [`strapi-plugin-content-tools`](https://www.npmjs.com/package/strap
 - [Installation & enabling](#installation--enabling)
 - [Feature 1 — Always-on filters](#feature-1--always-on-filters)
 - [Feature 2 — Move to another language](#feature-2--move-to-another-language)
+  - [Move one language onto another entry](#move-one-language-onto-another-entry)
 - [Feature 3 — Data Transfer](#feature-3--data-transfer)
 - [Settings pages](#settings-pages)
 - [HTTP API](#http-api)
