@@ -22,6 +22,18 @@ module.exports = {
       },
       {
         method: 'GET',
+        path: '/merge-candidates',
+        handler: 'move-locale.mergeCandidates',
+        config: { policies: [] },
+      },
+      {
+        method: 'POST',
+        path: '/merge-locale',
+        handler: 'move-locale.mergeLocale',
+        config: { policies: [] },
+      },
+      {
+        method: 'GET',
         path: '/config',
         handler: 'config.find',
         config: { policies: [] },

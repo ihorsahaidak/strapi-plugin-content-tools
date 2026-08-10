@@ -2,6 +2,7 @@ import pluginId from './pluginId';
 import RelocatedFilterBar from './components/RelocatedFilterBar';
 import moveLocaleDocumentAction from './actions/moveLocaleDocumentAction';
 import moveLocaleBulkAction from './actions/moveLocaleBulkAction';
+import mergeLocaleDocumentAction from './actions/mergeLocaleDocumentAction';
 
 export default {
   register(app: any) {
@@ -38,8 +39,13 @@ export default {
       Component: RelocatedFilterBar,
     });
 
-    // Feature 2 — move a single entry to another language (edit view + row menu).
-    cm.apis.addDocumentAction((actions: any[]) => [...actions, moveLocaleDocumentAction]);
+    // Feature 2 — move a single entry to another language (edit view + row menu),
+    // and move one language onto a different entry.
+    cm.apis.addDocumentAction((actions: any[]) => [
+      ...actions,
+      moveLocaleDocumentAction,
+      mergeLocaleDocumentAction,
+    ]);
 
     // Feature 3 — bulk action: move selected entries to another language.
     cm.apis.addBulkAction((actions: any[]) => [...actions, moveLocaleBulkAction]);

@@ -103,6 +103,135 @@ module.exports = ({ strapi }) => {
     return { documentId, sourceLocale, targetLocale, moved };
   };
 
+  /**
+   * Candidate documents to merge a locale INTO: same content type, and not
+   * already holding `locale` (which would collide on
+   * (document_id, locale, published_at)). Labelled with the content type's
+   * mainField taken from whichever locale the candidate does have, since by
+   * definition it has nothing in `locale` yet.
+   */
+  const mergeCandidates = async ({ uid, documentId, locale, q }) => {
+    getLocalizedContentType(uid);
+    const { tableName, documentIdColumn, localeColumn } = columns(uid);
+
+    // mainField drives the label; fall back to something recognisable.
+    const config = await strapi
+      .store({ type: 'plugin', name: 'content_manager' })
+      .get({ key: `configuration_content_types::${uid}` })
+      .catch(() => null);
+    const meta = strapi.db.metadata.get(uid);
+    const attrs = meta.attributes || {};
+    const preferred = config?.settings?.mainField;
+    const labelColumn = ['title', 'name', 'slug'].concat(preferred ? [preferred] : []).reverse()
+      .find((c) => attrs[c]) || documentIdColumn;
+    const labelCol = (attrs[labelColumn] && attrs[labelColumn].columnName) || labelColumn;
+
+    const knex = strapi.db.connection;
+    // Documents that DO have the locale — these are the ones to exclude.
+    const taken = knex(tableName).distinct(documentIdColumn).where(localeColumn, locale);
+
+    let query = knex(tableName)
+      .select(`${documentIdColumn} as documentId`)
+      .max(`${labelCol} as label`)
+      .whereNotIn(documentIdColumn, taken)
+      .groupBy(documentIdColumn)
+      .orderBy('label', 'asc')
+      .limit(50);
+
+    if (documentId) query = query.whereNot(documentIdColumn, documentId);
+    if (q) query = query.whereILike(labelCol, `%${q}%`);
+
+    const rows = await query;
+    // Which locales each candidate already has, so the picker can show it.
+    const ids = rows.map((r) => r.documentId);
+    const localesByDoc = new Map();
+    if (ids.length) {
+      const localeRows = await knex(tableName)
+        .distinct(`${documentIdColumn} as documentId`, `${localeColumn} as locale`)
+        .whereIn(documentIdColumn, ids);
+      for (const r of localeRows) {
+        if (!localesByDoc.has(r.documentId)) localesByDoc.set(r.documentId, []);
+        localesByDoc.get(r.documentId).push(r.locale);
+      }
+    }
+
+    return rows.map((r) => ({
+      documentId: r.documentId,
+      label: r.label == null || r.label === '' ? `(untitled) ${r.documentId}` : String(r.label),
+      locales: (localesByDoc.get(r.documentId) || []).sort(),
+    }));
+  };
+
+  /**
+   * Re-parent one locale: detach `locale` from `sourceDocumentId` and attach it
+   * to `targetDocumentId`, keeping the language and the rows themselves.
+   *
+   * Where moveOne changes WHICH LANGUAGE an entry is, this changes WHICH ENTRY
+   * a language belongs to — the fix for "I filled in fr on the wrong entry, and
+   * the entry I actually want is missing fr". Both draft and published rows
+   * move together; components/relations/media are keyed by row id, so they
+   * follow untouched.
+   *
+   * The source document is left with whatever locales it still had; if this was
+   * its only one, it disappears from the Content Manager (that being the point).
+   */
+  const mergeLocaleIntoDocument = async ({ uid, sourceDocumentId, targetDocumentId, locale }) => {
+    if (!sourceDocumentId || !targetDocumentId) {
+      throw fail('BadRequest', 'sourceDocumentId and targetDocumentId are required', 400);
+    }
+    if (sourceDocumentId === targetDocumentId) {
+      throw fail('BadRequest', 'Source and target entries are the same', 400);
+    }
+    if (!locale) throw fail('BadRequest', 'locale is required', 400);
+
+    getLocalizedContentType(uid);
+    await assertLocaleExists(locale);
+
+    if ((await countInLocale(uid, sourceDocumentId, locale)) === 0) {
+      throw fail('BadRequest', `The source entry has no "${locale}" version.`, 400);
+    }
+    // Guard the uniqueness Strapi relies on: (document_id, locale, published_at).
+    if ((await countInLocale(uid, targetDocumentId, locale)) > 0) {
+      throw fail(
+        'ConflictError',
+        `The target entry already has a "${locale}" version — move blocked. Delete it there first if you want to replace it.`,
+        409
+      );
+    }
+    // The target must actually exist in some other locale, otherwise this is a
+    // typo'd id and we would silently create an orphan document.
+    const { tableName, documentIdColumn, localeColumn } = columns(uid);
+    const targetExists = await strapi.db
+      .connection(tableName)
+      .where(documentIdColumn, targetDocumentId)
+      .count({ c: '*' })
+      .first();
+    if (!Number(targetExists?.c || 0)) {
+      throw fail('BadRequest', 'The target entry does not exist.', 400);
+    }
+
+    const moved = await strapi.db
+      .connection(tableName)
+      .where(documentIdColumn, sourceDocumentId)
+      .where(localeColumn, locale)
+      .update({ [documentIdColumn]: targetDocumentId });
+
+    const remaining = await strapi.db
+      .connection(tableName)
+      .where(documentIdColumn, sourceDocumentId)
+      .count({ c: '*' })
+      .first();
+
+    return {
+      uid,
+      locale,
+      sourceDocumentId,
+      targetDocumentId,
+      moved,
+      sourceRemainingRows: Number(remaining?.c || 0),
+    };
+  };
+
   const moveMany = async ({ uid, documentIds, sourceLocale, targetLocale }) => {
     if (!Array.isArray(documentIds) || documentIds.length === 0) {
       throw fail('BadRequest', 'documentIds must be a non-empty array', 400);
@@ -129,5 +258,5 @@ module.exports = ({ strapi }) => {
     return { sourceLocale, targetLocale, moved, blocked };
   };
 
-  return { moveOne, moveMany };
+  return { moveOne, moveMany, mergeCandidates, mergeLocaleIntoDocument };
 };

@@ -7,7 +7,8 @@ A Strapi 5 plugin that adds Content-Manager productivity tools:
    `createdAt` / `publishedAt` date ranges). Selections stick across reloads
    and navigation via a cookie, like the language selector.
 2. **Move an entry between languages** — reassign an entry's locale in place
-   (single, per-row, and bulk), without creating a copy.
+   (single, per-row, and bulk), without creating a copy. Or move one *language*
+   onto a different entry, for when a translation was filled in on the wrong one.
 3. **Data Transfer** — pull content + media from another Strapi environment
    into this one from the admin panel, with an optional pre-pull backup,
    live progress, and local regeneration of every image's responsive formats.
@@ -99,8 +100,38 @@ nothing left in the source locale. Both draft and published rows move; component
 Triggers: **edit-view action panel**, the **row `⋯` menu**, and the **bulk bar**.
 Only for localized collection types on entries that already exist.
 
-> ⚠️ Bypasses document-service lifecycles (raw DB write), so search-index
-> plugins don't reindex automatically.
+### Move one language onto another entry
+
+The mirror image of the above: the language stays, the entry it belongs to
+changes. Look for **Move this language to another entry** in:
+
+- the **edit-view action panel** — the "…" (more actions) menu near
+  Publish/Unpublish;
+- each row's own **`⋯` kebab menu** in the list view (scroll right if it's cut
+  off — it's the last column).
+
+It is **not** in the bulk-selection toolbar that appears when you tick
+checkboxes — that bar only ever shows *bulk* actions, and merging always asks
+"onto which one entry?", a question bulk-selecting several rows can't answer.
+Deselect any ticked rows if you don't see it; you're looking at the wrong menu,
+not a missing feature.
+
+Use it when a translation ends up on the wrong entry — you filled in French on a
+duplicate, and the entry you actually want has every language *except* French.
+Rather than retyping it there, move the French version across. Both draft and
+published rows move together, and because components, relations and media are
+keyed by row id, they travel with it untouched.
+
+- Only entries **without** that language are offered — Strapi requires
+  `(documentId, locale, publishedAt)` to be unique, so an entry can hold exactly
+  one version per language.
+- The source entry keeps its remaining languages, and **disappears entirely if
+  that was its only one** — which is usually the point.
+- The picker shows which languages each candidate already has, and previews what
+  it will end up with.
+
+> ⚠️ Both operations bypass document-service lifecycles (raw DB write), so
+> search-index plugins don't reindex automatically.
 
 ---
 
@@ -206,6 +237,8 @@ All routes are **admin-type** (authenticated admin), mounted under `/content-too
 | ------ | -------------------------------- | ----------------------------------------------------- | ------------------------------------ |
 | POST   | `/move-locale`                   | `{ uid, documentId, sourceLocale, targetLocale }`     | Move one entry to another language   |
 | POST   | `/move-locale-many`              | `{ uid, documentIds[], sourceLocale, targetLocale }`  | Bulk move                            |
+| GET    | `/merge-candidates`              | `?uid=&documentId=&locale=&q=`                        | Entries that lack `locale` (merge targets) |
+| POST   | `/merge-locale`                  | `{ uid, sourceDocumentId, targetDocumentId, locale }` | Move one language onto another entry |
 | GET    | `/config`                        | —                                                     | Per-CT config `{ fields }`           |
 | PUT    | `/config`                        | `{ config: { "<uid>": { … } } }`                      | Save config                          |
 | GET    | `/schema`                        | —                                                     | Filterable fields per CT + config    |
@@ -218,7 +251,7 @@ All routes are **admin-type** (authenticated admin), mounted under `/content-too
 | GET    | `/data-transfer/backups`         | —                                                     | Saved backup (at most one)           |
 | POST   | `/data-transfer/restore-backup`  | `{ backupId }`                                        | Restore a backup                     |
 
-`409`: `/move-locale` when the target language exists; `/data-transfer/pull`
+`409`: `/move-locale` and `/merge-locale` when the target already has that language; `/data-transfer/pull`
 when a transfer is already running.
 
 

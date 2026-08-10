@@ -35,4 +35,29 @@ module.exports = ({ strapi }) => ({
       sendError(ctx, err);
     }
   },
+
+  // GET /content-tools/merge-candidates?uid=&documentId=&locale=&q=
+  async mergeCandidates(ctx) {
+    const { uid, documentId, locale, q } = ctx.request.query || {};
+    try {
+      ctx.body = await service(strapi).mergeCandidates({ uid, documentId, locale, q });
+    } catch (err) {
+      sendError(ctx, err);
+    }
+  },
+
+  // POST /content-tools/merge-locale
+  async mergeLocale(ctx) {
+    const { uid, sourceDocumentId, targetDocumentId, locale } = ctx.request.body || {};
+    try {
+      ctx.body = await service(strapi).mergeLocaleIntoDocument({
+        uid,
+        sourceDocumentId,
+        targetDocumentId,
+        locale,
+      });
+    } catch (err) {
+      sendError(ctx, err);
+    }
+  },
 });
