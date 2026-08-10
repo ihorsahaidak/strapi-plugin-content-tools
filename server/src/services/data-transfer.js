@@ -465,14 +465,45 @@ module.exports = ({ strapi }) => {
     currentEngine = engine;
     status.counts = emptyCounts();
     const refresh = wireProgress(engine);
+    // Surface skipped relations. When the links stage can't map a source id to
+    // its new local id, `mapID` falls back to the SOURCE's ref — which doesn't
+    // exist here — the insert then trips a foreign-key constraint and the
+    // engine drops that link with only a warning. The row still imports, just
+    // without the relation, so nothing looks broken until something downstream
+    // filters on it (e.g. a news widget requiring `nomenclature` to be set
+    // silently stops listing those items). Count them and say so.
+    let droppedLinks = 0;
+    const droppedSamples = [];
     engine.diagnostics?.onDiagnostic?.(({ kind, details }) => {
-      if (kind === 'error') strapi.log.error(`[content-tools] pull: ${details?.message}`);
+      const message = details?.message || '';
+      if (kind === 'error') {
+        strapi.log.error(`[content-tools] pull: ${message}`);
+        return;
+      }
+      if (kind === 'warning') {
+        if (/skipping link/i.test(message)) {
+          droppedLinks += 1;
+          if (droppedSamples.length < 20) droppedSamples.push(message);
+          status.droppedLinks = droppedLinks;
+        } else {
+          strapi.log.warn(`[content-tools] pull: ${message}`);
+        }
+      }
     });
 
     await engine.transfer();
     refresh();
     currentEngine = null;
-    return sum(status.counts);
+
+    if (droppedLinks) {
+      strapi.log.warn(
+        `[content-tools] pull: ${droppedLinks} relation link(s) could not be reconnected and were skipped. ` +
+          `Affected records imported without those relations. First ${droppedSamples.length}:`
+      );
+      for (const sample of droppedSamples) strapi.log.warn(`[content-tools]   ${sample}`);
+    }
+
+    return { ...sum(status.counts), droppedLinks };
   };
 
   /* -------------------------------------------------------- media pull */
@@ -918,20 +949,29 @@ module.exports = ({ strapi }) => {
 
     // The backup (if one was taken) has served its purpose, drop it.
     if (backup) await discardBackup(backup.id);
+    const mediaPart = !includeMedia
+      ? 'media skipped'
+      : media.failed
+        ? `${media.done - media.failed}/${media.total} media resized (${media.failed} had issues, see logs)`
+        : `${media.done}/${media.total} media resized`;
+    // Dropped relations are the quiet failure mode worth naming up front: the
+    // records are all there, but something downstream that filters on a missing
+    // relation will appear to have lost content.
+    const linkPart = content.droppedLinks
+      ? ` — ⚠ ${fmtInt(content.droppedLinks)} relation link(s) could not be reconnected (records imported without them, see logs)`
+      : '';
     status = {
       ...status,
       running: false,
       step: 'done',
-      phase: !includeMedia
-        ? `Pull finished — content only (media skipped), ${fmtInt(content.entities)} entities`
-        : media.failed
-          ? `Pull finished — ${fmtInt(content.entities)} entities, ${media.done - media.failed}/${media.total} media resized (${media.failed} had issues, see logs)`
-          : `Pull finished — ${fmtInt(content.entities)} entities, ${media.done}/${media.total} media resized`,
+      droppedLinks: content.droppedLinks || 0,
+      phase: `Pull finished — ${fmtInt(content.entities)} entities, ${mediaPart}${linkPart}`,
       percent: 100,
       finishedAt: Date.now(),
     };
     strapi.log.info(
-      `[content-tools] data transfer completed (media ${!includeMedia ? 'skipped' : media.failed ? 'partial' : 'ok'})`
+      `[content-tools] data transfer completed (media ${!includeMedia ? 'skipped' : media.failed ? 'partial' : 'ok'}` +
+        `${content.droppedLinks ? `, ${content.droppedLinks} link(s) dropped` : ''})`
     );
   };
 

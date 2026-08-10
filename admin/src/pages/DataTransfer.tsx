@@ -45,6 +45,7 @@ type TransferStatus = {
   estimate?: { entities: number; assets: number } | null;
   percent?: number | null;
   backup?: { id: string; entities: number; assets: number; bytes: number; createdAt: string } | null;
+  droppedLinks?: number;
   error?: string | null;
   stopRequested?: boolean;
   startedAt?: number | null;
@@ -606,6 +607,12 @@ const DataTransferPage = () => {
                       />
                     ) : null}
                     {totalBytes > 0 ? <Stat label="Data" value={fmtBytes(totalBytes)} /> : null}
+                    {status.droppedLinks ? (
+                      <Stat
+                        label="Relations not reconnected"
+                        value={`${fmtInt(status.droppedLinks)} — see logs`}
+                      />
+                    ) : null}
                     {/* Only mentioned when there IS one — "Backup: skipped" is
                         noise, the user chose that a moment ago. */}
                     {status.backup ? (
