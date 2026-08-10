@@ -16,6 +16,14 @@
   "author": {
     "name": "Ihor Sahaidak"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ihorsahaidak/strapi-plugin-content-tools.git"
+  },
+  "homepage": "https://github.com/ihorsahaidak/strapi-plugin-content-tools#readme",
+  "bugs": {
+    "url": "https://github.com/ihorsahaidak/strapi-plugin-content-tools/issues"
+  },
   "type": "commonjs",
   "exports": {
     "./package.json": "./package.json",
