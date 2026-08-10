@@ -20,6 +20,12 @@ export default {
           Component: () => import('./pages/Settings'),
         },
         {
+          intlLabel: { id: `${pluginId}.settings.language-tools`, defaultMessage: 'Language tools' },
+          id: `${pluginId}-language-tools`,
+          to: `${pluginId}/language-tools`,
+          Component: () => import('./pages/LanguageTools'),
+        },
+        {
           intlLabel: { id: `${pluginId}.settings.data-transfer`, defaultMessage: 'Data Transfer' },
           id: `${pluginId}-data-transfer`,
           to: `${pluginId}/data-transfer`,

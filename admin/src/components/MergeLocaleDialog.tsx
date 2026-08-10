@@ -115,7 +115,6 @@ const MergeLocaleDialog = ({ onClose, uid, documentId, locale }: Props) => {
                 {candidates.map((c) => (
                   <ComboboxOption key={c.documentId} value={c.documentId}>
                     {c.label}
-                    {c.locales.length ? `  —  has ${c.locales.join(', ')}` : ''}
                   </ComboboxOption>
                 ))}
               </Combobox>
@@ -131,9 +130,8 @@ const MergeLocaleDialog = ({ onClose, uid, documentId, locale }: Props) => {
           {chosen ? (
             <Box padding={3} hasRadius background="neutral100">
               <Typography variant="pi" textColor="neutral700">
-                <b>{chosen.label}</b> will gain the <b>{locale}</b> version, ending up with{' '}
-                {[...chosen.locales, locale].sort().join(', ')}. This entry loses its {locale}
-                version, and disappears entirely if that was its only language.
+                <b>{chosen.label}</b> will gain the <b>{locale}</b> version. This entry loses it, and
+                disappears entirely if that was its only language.
               </Typography>
             </Box>
           ) : null}

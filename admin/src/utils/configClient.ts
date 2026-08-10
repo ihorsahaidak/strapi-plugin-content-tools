@@ -1,5 +1,10 @@
+import * as React from 'react';
+
 export type ContentToolsEntry = {
   fields: string[];
+  moveLocale: boolean;
+  mergeLocale: boolean;
+  mergeLabelTemplate: string;
 };
 export type ContentToolsConfig = Record<string, ContentToolsEntry>;
 
@@ -29,4 +34,37 @@ export function clearContentToolsConfigCache(): void {
   if (typeof window !== 'undefined') {
     delete (window as unknown as CacheWindow)[CACHE_KEY];
   }
+}
+
+/**
+ * Whether a boolean feature flag (`moveLocale` / `mergeLocale`) is enabled for
+ * a content type. Used inside document/bulk action descriptor functions —
+ * these run like components (Strapi calls them during render and they may use
+ * hooks, same as its own built-in actions), so a plain hook is the natural fit
+ * here rather than threading a prop through every call site.
+ *
+ * Starts `false` and flips true once the (cached, shared) config resolves —
+ * on a fully cold cache this means the action is briefly absent rather than
+ * briefly wrong, which matters more for something that changes what a click
+ * does to your data.
+ */
+export function useContentToolsFlag(
+  get: Getter,
+  uid: string | undefined,
+  flag: 'moveLocale' | 'mergeLocale'
+): boolean {
+  const [allowed, setAllowed] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!uid) return;
+    let cancelled = false;
+    fetchContentToolsConfig(get).then((cfg) => {
+      if (!cancelled) setAllowed(!!cfg[uid]?.[flag]);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [get, uid, flag]);
+
+  return allowed;
 }

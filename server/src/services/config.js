@@ -3,7 +3,7 @@
 /**
  * Per-content-type Content Tools configuration.
  *
- * Stored shape: { "<uid>": { fields: string[] } }
+ * Stored shape: { "<uid>": { fields, moveLocale, mergeLocale, mergeLabelTemplate } }
  * Legacy shapes normalized on read: a bare string[] (v1), and the v2 object
  * that also carried `export`/`import` flags for the removed import/export
  * feature — those keys are simply dropped.
@@ -13,6 +13,26 @@
 
 const STORE_KEY = 'filterConfig';
 const FILTERABLE_TYPES = ['relation', 'enumeration', 'boolean'];
+
+// Scalar attribute types usable inside a merge-label template — anything that
+// stringifies sensibly. Relations/components/dynamiczones/media/json/password
+// are deliberately excluded: they don't have a single meaningful value.
+const TEMPLATE_SCALAR_TYPES = [
+  'string',
+  'text',
+  'richtext',
+  'uid',
+  'email',
+  'enumeration',
+  'integer',
+  'float',
+  'decimal',
+  'biginteger',
+  'boolean',
+  'date',
+  'datetime',
+  'time',
+];
 
 // Noise never worth offering as a sticky filter.
 const EXCLUDED_FIELDS = new Set(['createdBy', 'updatedBy', 'localizations']);
@@ -29,12 +49,26 @@ module.exports = ({ strapi }) => {
     return FILTERABLE_TYPES.includes(attr.type);
   };
 
+  const isTemplateFieldAttr = (name, attr) => {
+    if (!attr || EXCLUDED_FIELDS.has(name)) return false;
+    return TEMPLATE_SCALAR_TYPES.includes(attr.type);
+  };
+
+  const isLocalized = (ct) => !!(ct.pluginOptions && ct.pluginOptions.i18n && ct.pluginOptions.i18n.localized);
+
   const normalizeEntry = (raw) => {
-    if (Array.isArray(raw)) return { fields: [...new Set(raw)] };
-    if (raw && typeof raw === 'object') {
-      return { fields: Array.isArray(raw.fields) ? [...new Set(raw.fields)] : [] };
+    if (Array.isArray(raw)) {
+      return { fields: [...new Set(raw)], moveLocale: false, mergeLocale: false, mergeLabelTemplate: '' };
     }
-    return { fields: [] };
+    if (raw && typeof raw === 'object') {
+      return {
+        fields: Array.isArray(raw.fields) ? [...new Set(raw.fields)] : [],
+        moveLocale: !!raw.moveLocale,
+        mergeLocale: !!raw.mergeLocale,
+        mergeLabelTemplate: typeof raw.mergeLabelTemplate === 'string' ? raw.mergeLabelTemplate : '',
+      };
+    }
+    return { fields: [], moveLocale: false, mergeLocale: false, mergeLabelTemplate: '' };
   };
 
   const getConfig = async () => {
@@ -58,11 +92,19 @@ module.exports = ({ strapi }) => {
     const clean = {};
     if (config && typeof config === 'object') {
       for (const [uid, raw] of Object.entries(config)) {
-        if (!strapi.contentTypes[uid]) continue;
+        const ct = strapi.contentTypes[uid];
+        if (!ct) continue;
         const entry = normalizeEntry(raw);
         entry.fields = [...new Set(validFieldsFor(uid, entry.fields))];
+        // Move/merge only make sense for localized collection types — never
+        // persist them as enabled for anything else, however the request
+        // to the settings UI happened.
+        const localizable = ct.kind === 'collectionType' && isLocalized(ct);
+        entry.moveLocale = localizable && entry.moveLocale;
+        entry.mergeLocale = localizable && entry.mergeLocale;
+        entry.mergeLabelTemplate = entry.mergeLocale ? entry.mergeLabelTemplate.slice(0, 500) : '';
         // Keep the entry only if it enables something.
-        if (entry.fields.length || entry.export || entry.import) clean[uid] = entry;
+        if (entry.fields.length || entry.moveLocale || entry.mergeLocale) clean[uid] = entry;
       }
     }
     await store().set({ key: STORE_KEY, value: clean });
@@ -70,9 +112,11 @@ module.exports = ({ strapi }) => {
   };
 
   /**
-   * Filterable schema shown in the settings UI: every api:: collection type
-   * and its relation / enumeration / boolean attributes (noise excluded),
-   * plus createdAt and (for D&P) publishedAt date-range filters.
+   * Schema shown in the settings UI: every api:: collection type, its
+   * relation / enumeration / boolean attributes for the sticky-filter picker
+   * (noise excluded), createdAt/publishedAt date-range filters, whether it's
+   * localized (move/merge only apply then), and the scalar fields available
+   * for a merge-label template.
    */
   const getSchema = () => {
     const out = [];
@@ -81,17 +125,28 @@ module.exports = ({ strapi }) => {
       if (!uid.startsWith('api::') || ct.kind !== 'collectionType') continue;
 
       const attributes = {};
+      const templateFields = [];
       for (const [name, attr] of Object.entries(ct.attributes || {})) {
-        if (!isFilterableAttr(name, attr)) continue;
-        if (attr.type === 'relation') attributes[name] = { type: 'relation', target: attr.target };
-        else if (attr.type === 'enumeration') attributes[name] = { type: 'enumeration', enum: attr.enum || [] };
-        else if (attr.type === 'boolean') attributes[name] = { type: 'boolean' };
+        if (isFilterableAttr(name, attr)) {
+          if (attr.type === 'relation') attributes[name] = { type: 'relation', target: attr.target };
+          else if (attr.type === 'enumeration') attributes[name] = { type: 'enumeration', enum: attr.enum || [] };
+          else if (attr.type === 'boolean') attributes[name] = { type: 'boolean' };
+        }
+        if (isTemplateFieldAttr(name, attr)) templateFields.push(name);
       }
 
       attributes.createdAt = { type: 'datetime' };
       if (ct.options && ct.options.draftAndPublish) attributes.publishedAt = { type: 'datetime' };
 
-      out.push({ uid, displayName: (ct.info && ct.info.displayName) || uid, attributes });
+      templateFields.sort();
+
+      out.push({
+        uid,
+        displayName: (ct.info && ct.info.displayName) || uid,
+        attributes,
+        localized: isLocalized(ct),
+        templateFields,
+      });
     }
 
     out.sort((a, b) => a.displayName.localeCompare(b.displayName));

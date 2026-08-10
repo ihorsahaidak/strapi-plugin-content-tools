@@ -17,7 +17,7 @@ type ContentTypeMeta = {
   attributes: Record<string, AttrMeta>;
 };
 
-const EMPTY: ContentToolsEntry = { fields: [] };
+const EMPTY: ContentToolsEntry = { fields: [], moveLocale: false, mergeLocale: false, mergeLabelTemplate: '' };
 
 const shortTarget = (uid?: string) => (uid ? uid.split('.').pop() : '');
 
@@ -65,12 +65,16 @@ const SettingsPage = () => {
 
   const entryFor = (uid: string): ContentToolsEntry => selection[uid] ?? EMPTY;
 
+  // Config is one flat per-content-type object shared with the Language tools
+  // page (its own moveLocale/mergeLocale/mergeLabelTemplate live alongside
+  // `fields`). Always merge onto the CURRENT entry rather than replacing it,
+  // so saving here never wipes language-tool settings made on the other tab.
   const updateEntry = (uid: string, patch: Partial<ContentToolsEntry>) => {
     setSelection((prev) => {
       const current = prev[uid] ?? EMPTY;
       const next: ContentToolsEntry = { ...current, ...patch };
       const updated = { ...prev };
-      if (next.fields.length) updated[uid] = next;
+      if (next.fields.length || next.moveLocale || next.mergeLocale) updated[uid] = next;
       else delete updated[uid];
       return updated;
     });

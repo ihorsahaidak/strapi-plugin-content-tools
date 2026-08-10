@@ -6,9 +6,11 @@ A Strapi 5 plugin that adds Content-Manager productivity tools:
    filters per content type (relations, enumerations, booleans, and
    `createdAt` / `publishedAt` date ranges). Selections stick across reloads
    and navigation via a cookie, like the language selector.
-2. **Move an entry between languages** — reassign an entry's locale in place
-   (single, per-row, and bulk), without creating a copy. Or move one *language*
-   onto a different entry, for when a translation was filled in on the wrong one.
+2. **Language tools** — reassign an entry's locale in place (single, per-row,
+   and bulk), without creating a copy. Or move one *language* onto a different
+   entry, for when a translation was filled in on the wrong one, with a
+   configurable label so you can tell candidates apart. Both are opt-in per
+   content type.
 3. **Data Transfer** — pull content + media from another Strapi environment
    into this one from the admin panel, with an optional pre-pull backup,
    live progress, and local regeneration of every image's responsive formats.
@@ -21,8 +23,10 @@ Published as [`strapi-plugin-content-tools`](https://www.npmjs.com/package/strap
 
 - [Installation & enabling](#installation--enabling)
 - [Feature 1 — Always-on filters](#feature-1--always-on-filters)
-- [Feature 2 — Move to another language](#feature-2--move-to-another-language)
+- [Feature 2 — Language tools](#feature-2--language-tools)
+  - [Move to another language](#move-to-another-language)
   - [Move one language onto another entry](#move-one-language-onto-another-entry)
+  - [Configuring the merge picker's label](#configuring-the-merge-pickers-label)
 - [Feature 3 — Data Transfer](#feature-3--data-transfer)
 - [Settings pages](#settings-pages)
 - [HTTP API](#http-api)
@@ -53,8 +57,9 @@ Then rebuild the admin panel and start Strapi:
 npm run build && npm run develop
 ```
 
-Requires **Strapi 5**. Nothing is enabled by default — filters are opt-in per
-content type from **Settings → Content Tools**.
+Requires **Strapi 5**. Nothing is enabled by default — filters and the two
+language-tools actions are opt-in per content type from **Settings → Content
+Tools**.
 
 ---
 
@@ -89,7 +94,21 @@ records than one page never lose valid selections.
 
 ---
 
-## Feature 2 — Move to another language
+## Feature 2 — Language tools
+
+Two independent actions, covered below. Both are **opt-in per content type**,
+switched on in **Settings → Content Tools → Language tools** — a tab that only
+lists localized collection types, since neither action means anything for a
+non-localized one. Nothing appears anywhere until enabled, the same "off until
+configured" default as Always-on filters.
+
+This is enforced twice, not just in the UI: enabling/disabling hides or shows
+the actions in the Content Manager immediately, **and** the server
+independently checks the same config before performing the operation,
+rejecting it with `403` if the content type isn't enabled. A stale browser tab
+that still shows an action after it's been disabled elsewhere can't act on it.
+
+### Move to another language
 
 Reassigns an entry's locale **in place** at the database level — no copy, and
 nothing left in the source locale. Both draft and published rows move; component
@@ -123,16 +142,43 @@ Rather than retyping it there, move the French version across. Both draft and
 published rows move together, and because components, relations and media are
 keyed by row id, they travel with it untouched.
 
-- Only entries **without** that language are offered — Strapi requires
-  `(documentId, locale, publishedAt)` to be unique, so an entry can hold exactly
-  one version per language.
+- Only entries **without** that language are offered as a target — Strapi
+  requires `(documentId, locale, publishedAt)` to be unique, so an entry can
+  hold exactly one version per language.
 - The source entry keeps its remaining languages, and **disappears entirely if
   that was its only one** — which is usually the point.
-- The picker shows which languages each candidate already has, and previews what
-  it will end up with.
+- Each candidate in the picker is labelled using **your configured template**
+  (see below), so you can tell them apart without guessing from a raw id.
 
-> ⚠️ Both operations bypass document-service lifecycles (raw DB write), so
-> search-index plugins don't reindex automatically.
+### Configuring the merge picker's label
+
+By default the picker falls back to a heuristic label (title/name/slug/the
+content-manager's own mainField, whichever exists) — not always enough to tell
+two similar entries apart. In **Settings → Content Tools → Language tools**,
+enabling "Move this language to another entry" for a content type reveals an
+**Entry label template** field, e.g.:
+
+```
+{title} — {slug} — {lang}
+```
+
+Underneath it, a row of buttons lists every variable available for that content
+type — its own text/string/richtext/uid/email/enum/numeric/boolean/date
+fields, plus two built-ins: `{documentId}` and `{lang}`. **Click one to insert
+it** at the current cursor position in the template field, so you can build a
+template without typing braces by hand.
+
+`{lang}` matters because most fields are themselves per-locale — "the title" of
+a document isn't one fixed value. Since a merge candidate by definition lacks
+the language being moved, its label is built from **one representative row**:
+the site's default locale if the candidate has it, otherwise its earliest
+locale code. `{lang}` names exactly which one supplied the data shown, so the
+label never implies a language the candidate doesn't have.
+
+Leave the template empty to keep the heuristic fallback.
+
+> ⚠️ Both language-tools operations bypass document-service lifecycles (raw DB
+> write), so search-index plugins don't reindex automatically.
 
 ---
 
@@ -209,21 +255,40 @@ looking like missing content.
 
 ## Settings pages
 
-Registered via `createSettingSection` under a **Content Tools** section.
+Registered via `createSettingSection` under a **Content Tools** section —
+three tabs:
 
-- **Always-on filters** — filterable fields per content type, grouped **Relations /
-  Choices / Dates**. Save shows a **"Reload to apply"** prompt.
+- **Always-on filters** — filterable fields per content type, grouped
+  **Relations / Choices / Dates**. Save shows a **"Reload to apply"** prompt.
+- **Language tools** — per *localized* content type: enable **Move to another
+  language** and/or **Move this language to another entry**, and — when the
+  latter is on — the merge picker's **Entry label template** with click-to-insert
+  variable buttons.
 - **Data Transfer** — saved environments, pull, live status, backup.
 
-Config shape (plugin-store key `filterConfig`; legacy array form auto-normalized):
+The first two tabs are separate pages but **share one config object per
+content type** (plugin-store key `filterConfig`; legacy bare-array form
+auto-normalized) — `fields` belongs to Always-on filters, `moveLocale` /
+`mergeLocale` / `mergeLabelTemplate` to Language tools. Each page always loads
+the whole entry and merges only its own edits onto it before saving, so saving
+on one tab can never erase what the other configured — including while both
+are open in different tabs at once, as long as each is saved with its own
+fresh load rather than a stale one carried over from before the other's edit.
 
 ```jsonc
 {
   "api::page.page": {
-    "fields": ["websites", "countries", "page_type", "createdAt"]
+    "fields": ["websites", "countries", "page_type", "createdAt"],
+    "moveLocale": true,
+    "mergeLocale": true,
+    "mergeLabelTemplate": "{title} — {slug} — {lang}"
   }
 }
 ```
+
+`moveLocale`/`mergeLocale` are only ever persisted `true` for localized
+collection types — the server strips them for anything else regardless of what
+a request sends.
 
 Other plugin-store keys: `dataTransferTargets`, `dataTransferBackups`,
 `dataTransferEstimates`.
@@ -240,9 +305,9 @@ All routes are **admin-type** (authenticated admin), mounted under `/content-too
 | POST   | `/move-locale-many`              | `{ uid, documentIds[], sourceLocale, targetLocale }`  | Bulk move                            |
 | GET    | `/merge-candidates`              | `?uid=&documentId=&locale=&q=`                        | Entries that lack `locale` (merge targets) |
 | POST   | `/merge-locale`                  | `{ uid, sourceDocumentId, targetDocumentId, locale }` | Move one language onto another entry |
-| GET    | `/config`                        | —                                                     | Per-CT config `{ fields }`           |
+| GET    | `/config`                        | —                                                     | Per-CT config `{ fields, moveLocale, mergeLocale, mergeLabelTemplate }` |
 | PUT    | `/config`                        | `{ config: { "<uid>": { … } } }`                      | Save config                          |
-| GET    | `/schema`                        | —                                                     | Filterable fields per CT + config    |
+| GET    | `/schema`                        | —                                                     | Filterable fields, `localized`, `templateFields` per CT + config |
 | GET    | `/data-transfer/targets`         | —                                                     | Saved environments (token masked)    |
 | PUT    | `/data-transfer/targets`         | `{ targets: [...] }`                                  | Save environments                    |
 | POST   | `/data-transfer/probe`           | `{ targetId }`                                        | Reachability / token / version check |
@@ -260,7 +325,16 @@ when a transfer is already running.
 
 ## Known limitations
 
-- **Locale move** doesn't trigger search-index reindexing (raw DB write).
+- **Language tools are off by default** for every content type — both actions
+  need enabling in Settings → Content Tools → Language tools before they
+  appear anywhere.
+- **Locale move / merge** don't trigger search-index reindexing (raw DB write).
+- **Merge candidates with a label template** are capped at **500** (fetched in
+  document-id order, before search/sort) — building a templated label needs
+  real row data rather than one SQL-aggregated column, so it can't sort/search
+  the database directly the way the untemplated fallback can. A content type
+  with more than 500 documents lacking a given language may not surface every
+  possible target through search.
 - **Numeric ids are not stable across a Data Transfer pull** — `documentId` is.
   Bookmarked admin URLs and anything holding a raw id will go stale.
 - **Data Transfer is pull-only** (remote → local); nothing is pushed. It runs
